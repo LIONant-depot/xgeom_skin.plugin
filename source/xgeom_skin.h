@@ -326,11 +326,15 @@ namespace xserializer::io_functions
     }
 
     //-------------------------------------------------------------------------
+    // One definition for every geometry type: a host can include the loaders of more than one of them
+    #ifndef XGEOM_MATERIAL_INSTANCE_REF_SERIALIZEIO
+    #define XGEOM_MATERIAL_INSTANCE_REF_SERIALIZEIO
     template<> inline
     xerr SerializeIO<xrsc::material_instance_ref>(xserializer::stream& Stream, const xrsc::material_instance_ref& IR) noexcept
     {
         return Stream.Serialize(IR.m_Instance.m_Value);
     }
+    #endif
 
     //-------------------------------------------------------------------------
     template<> inline

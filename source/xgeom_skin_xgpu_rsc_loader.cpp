@@ -6,13 +6,13 @@
 //
 // We will register the loader, the properties,
 //
-inline static auto s_GeomRegistrations = xresource::common_registrations<xrsc::geom_skin_type_guid_v>{};
+inline static auto s_GeomSkinRegistrations = xresource::common_registrations<xrsc::geom_skin_type_guid_v>{};
 
 
 //------------------------------------------------------------------
 
 static
-std::size_t MultipleOf64(std::size_t num)
+std::size_t SkinMultipleOf64(std::size_t num)
 {
     return (num + 63) & ~63;
 }
@@ -20,11 +20,11 @@ std::size_t MultipleOf64(std::size_t num)
 //------------------------------------------------------------------
 
 template<typename T>
-std::size_t MakeMuultipleOf64(const T& X)
+std::size_t SkinMakeMultipleOf64(const T& X)
 {
     return X.size();
     auto s = sizeof(X[0]);
-    return MultipleOf64(s * X.size())/ s;
+    return SkinMultipleOf64(s * X.size())/ s;
 }
 
 //------------------------------------------------------------------
