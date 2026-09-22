@@ -30,6 +30,7 @@ Run as `<resource name>\<Command>`. Paths, values and node paths are base64.
 | Command | |
 |---|---|
 | `ListProperties [-Filter text]`, `SetProperty -Path -Value [-Before]` | descriptor properties (undoable) |
+| `ListOp -Path -Op Insert\|Delete\|Move -Index n [-ToIndex n]` | inserts, deletes or moves an element in the middle of a 1D array property (undoable); ordinal keys only |
 | `ListNodes` | the scene nodes with their merge group and deleted state (after the first compile) |
 | `AddNodeToNewGroup -Node`, `AddNodeToGroup -Node -Group index`, `RemoveNodeFromGroup -Node` | merge groups (undoable) |
 | `DeleteNode -Node`, `UndeleteNode -Node` | leave a node and its children out of the compiled geometry (undoable) |
