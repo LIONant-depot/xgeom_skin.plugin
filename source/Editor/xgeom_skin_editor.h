@@ -9,6 +9,7 @@
 #include "dependencies/xresource_pipeline_v2/source/editor/E10_InspectorPickers.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/E10_Resources.h"
 #include "plugins/xgeom_skin.plugin/source/Editor/xgeom_skin_editor_preview.h"
+#include "plugins/xgeom_skin.plugin/source/Editor/xgeom_skin_thumbnail.h"
 #include "plugins/xgeom_skin.plugin/source/xgeom_skin_xgpu_rsc_loader.cpp"      // the resource loader: compiled once, in the host's translation unit
 #include "source/tools/xgpu_imgui_timeline.h"
 
@@ -673,6 +674,8 @@ namespace xgeom_skin_editor
     , [](xresource::full_guid Guid, e10::library::guid LibraryGuid, xgpu::device* pDevice) -> std::unique_ptr<xeditor::resource_editor>
       { return std::make_unique<session>(Guid, LibraryGuid, pDevice); }
     };
+
+    inline const xeditor::auto_register_thumbnail_renderer g_ThumbReg{ xrsc::geom_skin_type_guid_v, []{ return std::make_unique<thumbnail_renderer>(); } };
 }
 
 #endif // XGEOM_SKIN_EDITOR_H
