@@ -267,7 +267,8 @@ namespace xgeom_skin_editor
             Inspector.m_OnResourceLeftSize.Register<[](xproperty::inspector&, const xproperty::type::object&, void* pInstance, std::string_view Path, const xproperty::any&, ImGuiTreeNodeFlags Flags, const char* pName, bool& Open)
             {
                 std::string NewName;
-                bool bDisable = false;
+                bool bDisable     = false;
+                bool bIsMaterialSlot = false;
 
                 // Only the material slots are relabelled: the delegate is called for every resource row of the inspector. (Matched by
                 // path: the property table object differs between translation units, so its address says nothing.)
@@ -283,15 +284,22 @@ namespace xgeom_skin_editor
                         int Index = 0;
                         if (std::from_chars(Text.data(), Text.data() + Text.size(), Index).ec == std::errc() && Index >= 0 && Index < static_cast<int>(pDesc->m_MaterialDetailsList.size()))
                         {
-                            NewName  = std::format("{} {}", pName, pDesc->m_MaterialDetailsList[Index].m_Name);
-                            pName    = NewName.c_str();
-                            bDisable = pDesc->m_MaterialDetailsList[Index].m_RefCount <= 0;
+                            NewName       = std::format("{} {}", pName, pDesc->m_MaterialDetailsList[Index].m_Name);
+                            pName         = NewName.c_str();
+                            bDisable      = pDesc->m_MaterialDetailsList[Index].m_RefCount <= 0;
+                            bIsMaterialSlot = true;
                         }
                     }
                 }
 
                 if (bDisable) ImGui::BeginDisabled(true);
-                if (!Path.empty()) Open = ImGui::TreeNodeEx(reinterpret_cast<const void*>(std::hash<std::string_view>{}(Path)), ImGuiTreeNodeFlags_Framed | Flags, "  %s", pName);
+                // The "  " (two leading spaces) gives an ordinary resource-ref row - no arrow, no icon
+                // cluster of its own - a little breathing room against the Framed box's own left edge.
+                // A material-slot row is a per-element row of the array-controls cluster (drag/insert/
+                // delete icons already sit immediately to its left), so that same padding reads as an
+                // unwanted gap between the trashcan icon and the "[i]" index there - dropped for that
+                // case specifically, kept for every other resource-ref row using this same delegate.
+                if (!Path.empty()) Open = ImGui::TreeNodeEx(reinterpret_cast<const void*>(std::hash<std::string_view>{}(Path)), ImGuiTreeNodeFlags_Framed | Flags, bIsMaterialSlot ? "%s" : "  %s", pName);
                 else               Open = ImGui::TreeNodeEx(pName, Flags);
                 if (bDisable) ImGui::EndDisabled();
             }>();
@@ -434,7 +442,7 @@ namespace xgeom_skin_editor
             auto* pSkeleton = m_bHasGeom ? xresource::g_Mgr.getResource(m_SkeletonRef) : nullptr;
             if (!pGeom || !pSkeleton) { ImGui::SetCursorScreenPos(Min); ImGui::TextWrapped("%s", m_ErrorMessage.empty() ? "Nothing to show." : m_ErrorMessage.c_str()); return; }
 
-            m_Preview.UpdateView(Avail.x, Avail.y);
+            m_Preview.UpdateView(Min, Avail.x, Avail.y);
             EvaluatePose(*pSkeleton);
             m_Preview.UploadBones(*pSkeleton, m_PoseWorlds, m_Settings.m_PoseType);
             m_Preview.RenderShadow(*pWindow, *pGeom, m_Settings);
