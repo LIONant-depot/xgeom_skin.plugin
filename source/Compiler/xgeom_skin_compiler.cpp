@@ -889,9 +889,10 @@ xerr ConvertToCompilerMesh(void)
             result.m_nClusters  = static_cast<std::uint16_t>(OutClusters.size());
             result.m_pCluster   = new geom::cluster[result.m_nClusters];
             std::ranges::copy(OutClusters, result.m_pCluster);
-            result.m_BBox       = OutGlobalBBox.to_fbbox();
-            result.m_nVertices  = static_cast<std::uint32_t>(OutAllStaticVerts.size());
-            result.m_nIndices   = static_cast<std::uint32_t>(OutAllIndices.size());
+            result.m_BBox         = OutGlobalBBox.to_fbbox();
+            result.m_nVertices    = static_cast<std::uint32_t>(OutAllStaticVerts.size());
+            result.m_nIndices     = static_cast<std::uint32_t>(OutAllIndices.size());
+            result.m_SkeletonRef  = m_Descriptor.m_SkeletonRef;    // required by Validate() - always set by the time compilation gets here
 
             //
             // Set all the material instances

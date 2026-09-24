@@ -4,6 +4,7 @@
 
 #include "dependencies/xmath/source/xmath_fshapes.h"
 #include "dependencies/xserializer/source/xserializer.h"
+#include "plugins/xskeleton.plugin/source/xskeleton_xgpu_rsc_loader.h"
 #include <span>  // Add for std::span
 #include <algorithm>
 
@@ -11,7 +12,13 @@ namespace xgeom_skin
 {
     struct geom
     {
-        inline static constexpr auto xserializer_version_v = 1;
+        // v2: added m_SkeletonRef - the compiled resource previously had no reference to the skeleton
+        // it is skinned to at all (only baked bone indices/weights per vertex), so anything that only
+        // has this resource's guid (a thumbnail renderer, e.g.) had no way to find its skeleton. The
+        // descriptor always had one (m_SkeletonRef, required - Validate() errors if empty); this just
+        // carries it through to the compiled side the same way m_pDefaultMaterialInstances already
+        // does for material refs.
+        inline static constexpr auto xserializer_version_v = 2;
         struct mesh
         {
             std::array<char, 32>    m_Name;
@@ -188,6 +195,7 @@ namespace xgeom_skin
         inline std::span<std::uint16_t>                 getIndices                  (void)                              const   noexcept { return { reinterpret_cast<std::uint16_t*>(m_pData + m_IndicesOffset),        m_nIndices  }; }
         inline std::span<cluster_data>                  getClusterData              (void)                              const   noexcept { return { reinterpret_cast<cluster_data*> (m_pData + m_ClusterDataOffset),    m_nClusters }; }
         inline std::span<xrsc::material_instance_ref>   getDefaultMaterialInstances (void)                              const   noexcept { return { m_pDefaultMaterialInstances, m_nDefaultMaterialInstances }; }
+        inline xrsc::skeleton                           getSkeletonRef              (void)                              const   noexcept { return m_SkeletonRef; }
 
         xmath::fbbox                    m_BBox;
         char*                           m_pData;  // Contiguous buffer for GPU data ( vertices, extras, indices)
@@ -196,6 +204,7 @@ namespace xgeom_skin
         submesh*                        m_pSubMesh;
         cluster*                        m_pCluster;
         xrsc::material_instance_ref*    m_pDefaultMaterialInstances;
+        xrsc::skeleton                  m_SkeletonRef;   // the skeleton this geometry is skinned to - always set (descriptor requires one)
         runtime_allocation              m_RunTimeSpace;
         std::size_t                     m_DataSize;
         std::size_t                     m_VertexOffset;
@@ -336,6 +345,18 @@ namespace xserializer::io_functions
     }
     #endif
 
+    // Same "one definition for every host" guard as material_instance_ref above - xgeom_static also
+    // links against a skeleton_ref-less past, so this only ever needs defining once regardless of how
+    // many geometry loaders end up including this header in the same translation unit.
+    #ifndef XGEOM_SKELETON_REF_SERIALIZEIO
+    #define XGEOM_SKELETON_REF_SERIALIZEIO
+    template<> inline
+    xerr SerializeIO<xrsc::skeleton>(xserializer::stream& Stream, const xrsc::skeleton& SR) noexcept
+    {
+        return Stream.Serialize(SR.m_Instance.m_Value);
+    }
+    #endif
+
     //-------------------------------------------------------------------------
     template<> inline
     xerr SerializeIO<xgeom_skin::geom>(xserializer::stream& Stream, const xgeom_skin::geom& Geom) noexcept
@@ -352,6 +373,7 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_pCluster,                     Geom.m_nClusters))
             || (Err = Stream.Serialize(Geom.m_nDefaultMaterialInstances))
             || (Err = Stream.Serialize(Geom.m_pDefaultMaterialInstances,    Geom.m_nDefaultMaterialInstances))
+            || (Err = Stream.Serialize(Geom.m_SkeletonRef))
             || (Err = Stream.Serialize(Geom.m_DataSize))
             || (Err = Stream.Serialize(Geom.m_pData,                        Geom.m_DataSize))
             || (Err = Stream.Serialize(Geom.m_RunTimeSpace))
