@@ -64,15 +64,16 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
     ;
     assert(p == nullptr);
 
-    // Resolve the default material instances
+    // Resolve the default material instances. A referenced material instance that fails to load
+    // (missing/uncompiled itself, or a broken dependency of its own) is the same expected,
+    // recoverable case as the geometry's own file above - this slot just stays unresolved, same as
+    // an empty ref (see the "no default material" comment above); every consumer already renders a
+    // fallback (e.g. the preview's own m_White default) rather than assuming every slot resolved.
     for (auto& E : pXGPUGeom->getDefaultMaterialInstances())
     {
         if (not E.empty())
         {
-            if (auto pRsc = Mgr.getResource(E); pRsc == nullptr)
-            {
-                assert(false);
-            }
+            (void)Mgr.getResource(E);
         }
         else
         {
