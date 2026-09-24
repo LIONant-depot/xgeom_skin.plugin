@@ -86,6 +86,8 @@ namespace xgeom_skin_editor
             m_Runtime.m_bReframe = false;   // exact-fit distance below replaces the panel's own bounding-sphere auto-fit
 
             m_Runtime.m_View.setFov(20_xdeg);
+            m_Runtime.m_View.setAspect(1.0f);
+            m_Runtime.m_View.setViewport({ 0, 0, static_cast<int>(s_CellPixels), static_cast<int>(s_CellPixels) });   // ComputeTightFitDistance needs a real viewport BEFORE it runs (it calls View.LookAt/getW2C itself) - UpdateView below sets it again, redundant but harmless
             // Front-biased, not a full 3/4 corner view - same convention as xgeom_static_thumbnail.h's
             // own angle (see that file's comment for the full reasoning): mostly-front reads a
             // silhouette better at 128x128 than a strong diagonal does.
