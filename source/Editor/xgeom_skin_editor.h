@@ -437,6 +437,7 @@ namespace xgeom_skin_editor
             const ImVec2 Min   = ImGui::GetCursorScreenPos();
             ImGui::GetWindowDrawList()->AddRectFilled(Min, ImVec2(Min.x + Avail.x, Min.y + Avail.y), IM_COL32(115, 115, 115, 255));
             ImGui::InvisibleButton("##SkinViewport", Avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+            xeditor::PreviewGestures();
             m_Preview.HandleInput();
 
             if (!m_Preview.m_bReady || !pWindow) { ImGui::SetCursorScreenPos(Min); ImGui::TextDisabled("The 3D view needs a GPU device (open from the editor)."); return; }
