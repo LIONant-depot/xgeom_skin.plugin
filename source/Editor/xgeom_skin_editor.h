@@ -6,6 +6,7 @@
 // and through the node commands (merge groups, deleted nodes), all undoable; the compiled geometry is previewed in 3D deformed by the pose of
 // its skeleton, or by an animation package playing on it. Hosts include this header and open editors through xeditor::open_resource_editors.
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
+#include "dependencies/xeditor/include/xeditor/hint.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
 #include "plugins/xgeom_skin.plugin/source/Editor/xgeom_skin_editor_preview.h"
@@ -472,17 +473,17 @@ namespace xgeom_skin_editor
             }
 
             if (ImGui::Button(m_bPlaying ? ed::g_PauseIcon : ed::g_PlayIcon)) m_bPlaying = !m_bPlaying;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(m_bPlaying ? "Pause" : "Play");
+            if (ImGui::IsItemHovered()) xeditor::hint::Text(m_bPlaying ? "Pause" : "Play");
             ImGui::SameLine();
             if (ImGui::Button(ed::g_GoToStartIcon)) { m_TimeSeconds = 0.0f; m_LoopsElapsed = 0; }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Go to start");
+            if (ImGui::IsItemHovered()) xeditor::hint::Text("Go to start");
             ImGui::SameLine();
             if (ImGui::Button(ed::g_GoToEndIcon)) m_TimeSeconds = Length;
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Go to end");
+            if (ImGui::IsItemHovered()) xeditor::hint::Text("Go to end");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(140.0f);
             ImGui::SliderInt("##speed", &m_iSpeedIndex, 0, ed::g_NumPlaybackSpeeds - 1, ed::g_PlaybackSpeedLabels[m_iSpeedIndex]);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Playback speed");
+            if (ImGui::IsItemHovered()) xeditor::hint::Text("Playback speed");
 
             const float Footer = ImGui::GetTextLineHeightWithSpacing();
             if (xgpu::tools::imgui::timeline::Draw(m_Timeline, m_TimeSeconds, Length, static_cast<float>(Clip.m_FPS), {}, "playback_timeline", "Clip", std::max(ImGui::GetContentRegionAvail().y - Footer, 0.0f)))
@@ -582,7 +583,7 @@ namespace xgeom_skin_editor
                         ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<intptr_t>(Index)), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen, "\xEE\xAF\x92 %s", Mesh.m_Name.c_str());
                         if (ImGui::IsItemHovered())
                         {
-                            ImGui::BeginTooltip();
+                            xeditor::hint::PlaceAwayFromEdges(16.0f, ImVec2(380.0f, 220.0f)); ImGui::BeginTooltip();
                             ImGui::PushStyleColor(ImGuiCol_Text, TextColor);
                             ImGui::Text("nFaces    : %d\nnUVs      : %d\nnColors   : %d\nnMaterials: %d\n", Mesh.m_NumFaces, Mesh.m_NumUVs, Mesh.m_NumColors, static_cast<int>(Mesh.m_MaterialList.size()));
                             for (auto& Mat : Mesh.m_MaterialList)
