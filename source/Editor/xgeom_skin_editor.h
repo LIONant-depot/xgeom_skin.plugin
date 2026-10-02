@@ -20,7 +20,7 @@
 namespace xgeom_skin_editor
 {
     //--------------------------------------------------------------------------------------------
-    // Node commands. A node is named by its path from the root of the imported scene ("Root/Body/Wheel", base64 on the command line).
+    // Node commands. A node is named by its path from the root of the imported scene ("Root/Body/Wheel", on the command line).
     // Each one snapshots the descriptor first, so undo puts back everything it touched (groups, ungrouped meshes, deleted list, material counts).
     //--------------------------------------------------------------------------------------------
     struct node_cmd : xundo::command_base
@@ -39,7 +39,7 @@ namespace xgeom_skin_editor
         const char* getCommandHelp() const noexcept override { return m_pHelp; }
         void RegisterArguments() noexcept override
         {
-            m_hNode = m_Parser.addOption("Node", "Node path from the scene root, base64", true, 1);
+            m_hNode = m_Parser.addOption("Node", "Node path from the scene root", true, 1);
             if (m_bGroupArg) m_hGroup = m_Parser.addOption("Group", "Index of the merge group", true, 1);
         }
 
@@ -53,7 +53,7 @@ namespace xgeom_skin_editor
             int iGroup = 0;
             if (m_bGroupArg) std::from_chars(Group.data(), Group.data() + Group.size(), iGroup);
 
-            const auto Path = xeditor::Base64Decode(Node);
+            const auto Path = Node;
             if (!m_Details.findNode(xgeom_skin::SplitNodePath(Path)).first) return std::format("{}: no node '{}' (compile the geometry first)", m_pCommandName, Path);
 
             auto Err = m_Apply(static_cast<xgeom_skin::descriptor&>(*m_Doc.m_pDescriptor), m_Details, Path, iGroup);
@@ -212,11 +212,11 @@ namespace xgeom_skin_editor
 
         session(xresource::full_guid Guid, xresource_editor::library::guid LibraryGuid, xgpu::device* pDevice) noexcept
             : descriptor_editor("SkinGeom", Guid, LibraryGuid, pDevice)
-            , m_AddToNewGroup   (m_Undo, m_Document, m_Details, "AddNodeToNewGroup",  "Puts a node in a new merge group (undoable). Usage: AddNodeToNewGroup -Node base64",            &AddToNewGroup,   false)
-            , m_AddToGroup      (m_Undo, m_Document, m_Details, "AddNodeToGroup",     "Puts a node in a merge group (undoable). Usage: AddNodeToGroup -Node base64 -Group index",      &AddToGroup,      true)
-            , m_RemoveFromGroup (m_Undo, m_Document, m_Details, "RemoveNodeFromGroup","Takes a node out of its merge group (undoable). Usage: RemoveNodeFromGroup -Node base64",         &RemoveFromGroup, false)
-            , m_DeleteNode      (m_Undo, m_Document, m_Details, "DeleteNode",         "Leaves a node (and its children) out of the compiled geometry (undoable). Usage: DeleteNode -Node base64", &DeleteNode, false)
-            , m_UndeleteNode    (m_Undo, m_Document, m_Details, "UndeleteNode",       "Puts a deleted node back (undoable). Usage: UndeleteNode -Node base64",                         &UndeleteNode,    false)
+            , m_AddToNewGroup   (m_Undo, m_Document, m_Details, "AddNodeToNewGroup",  "Puts a node in a new merge group (undoable). Usage: AddNodeToNewGroup -Node text",            &AddToNewGroup,   false)
+            , m_AddToGroup      (m_Undo, m_Document, m_Details, "AddNodeToGroup",     "Puts a node in a merge group (undoable). Usage: AddNodeToGroup -Node text -Group index",      &AddToGroup,      true)
+            , m_RemoveFromGroup (m_Undo, m_Document, m_Details, "RemoveNodeFromGroup","Takes a node out of its merge group (undoable). Usage: RemoveNodeFromGroup -Node text",         &RemoveFromGroup, false)
+            , m_DeleteNode      (m_Undo, m_Document, m_Details, "DeleteNode",         "Leaves a node (and its children) out of the compiled geometry (undoable). Usage: DeleteNode -Node text", &DeleteNode, false)
+            , m_UndeleteNode    (m_Undo, m_Document, m_Details, "UndeleteNode",       "Puts a deleted node back (undoable). Usage: UndeleteNode -Node text",                         &UndeleteNode,    false)
             , m_ListNodes(m_Undo, m_Document, m_Details)
             , m_SetPreview(m_Undo, m_Settings), m_ListPreview(m_Undo, m_Settings)
             , m_CameraCmds(m_Undo, m_Preview.Camera())
@@ -524,7 +524,7 @@ namespace xgeom_skin_editor
                 return std::ranges::any_of(N.m_Children, [&](auto& C) { return WorthRendering(C); });
             };
 
-            auto Command = [&](const char* pName, const std::string& Path) { return std::format("{} -Node {}", pName, xeditor::Base64Encode(Path)); };
+            auto Command = [&](const char* pName, const std::string& Path) { return std::format("{} -Node {}", pName, xeditor::Quote(Path)); };
 
             std::string Path = Root.m_Name;
             std::function<void(const xgeom_skin::details::node&, bool, bool)> DisplayNode = [&](const xgeom_skin::details::node& N, bool bIncluded, bool bDeletedParent)
@@ -561,7 +561,7 @@ namespace xgeom_skin_editor
                             if (!Desc.m_MergeGroupList.empty() && ImGui::BeginMenu("Add to Merge Group"))
                             {
                                 for (int i = 0; i < static_cast<int>(Desc.m_MergeGroupList.size()); ++i)
-                                    if (ImGui::MenuItem(Desc.m_MergeGroupList[i].m_Name.c_str())) Pending = std::format("AddNodeToGroup -Node {} -Group {}", xeditor::Base64Encode(Path), i);
+                                    if (ImGui::MenuItem(Desc.m_MergeGroupList[i].m_Name.c_str())) Pending = std::format("AddNodeToGroup -Node {} -Group {}", xeditor::Quote(Path), i);
                                 ImGui::EndMenu();
                             }
                         }

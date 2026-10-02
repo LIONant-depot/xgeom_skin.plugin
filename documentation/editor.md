@@ -25,7 +25,7 @@ render pass on the window before the frame's UI is rendered, then the geometry i
 
 ## Commands
 
-Run as `<resource name>\<Command>`. Paths, values and node paths are base64.
+Run as `<resource name>\<Command>`. Paths, values and node paths are text, in quotes.
 
 | Command | |
 |---|---|
