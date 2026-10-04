@@ -266,7 +266,7 @@ namespace xgeom_skin_editor
         static void RegisterMaterialRowLabels(xproperty::inspector& Inspector) noexcept
         {
             Inspector.m_OnResourceLeftSize.m_Delegates.clear();
-            Inspector.m_OnResourceLeftSize.Register<[](xproperty::inspector&, const xproperty::type::object&, void* pInstance, std::string_view Path, const xproperty::any&, ImGuiTreeNodeFlags Flags, const char* pName, bool& Open)
+            Inspector.m_OnResourceLeftSize.Register<[](xproperty::inspector& Inspector, const xproperty::type::object&, void* pInstance, std::string_view Path, const xproperty::any&, ImGuiTreeNodeFlags Flags, const char* pName, bool& Open)
             {
                 std::string NewName;
                 bool bDisable     = false;
@@ -295,6 +295,8 @@ namespace xgeom_skin_editor
                 }
 
                 if (bDisable) ImGui::BeginDisabled(true);
+                // As tall as the reference widget beside the label (whoever draws the label, a reference row has one height).
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, xproperty::inspector::ResourceRowFramePadding(Inspector.m_CurrentProperty.m_Flags.m_bSmallResource));
                 // The "  " (two leading spaces) gives an ordinary resource-ref row - no arrow, no icon
                 // cluster of its own - a little breathing room against the Framed box's own left edge.
                 // A material-slot row is a per-element row of the array-controls cluster (drag/insert/
@@ -303,6 +305,7 @@ namespace xgeom_skin_editor
                 // case specifically, kept for every other resource-ref row using this same delegate.
                 if (!Path.empty()) Open = ImGui::TreeNodeEx(reinterpret_cast<const void*>(std::hash<std::string_view>{}(Path)), ImGuiTreeNodeFlags_Framed | Flags, bIsMaterialSlot ? "%s" : "  %s", pName);
                 else               Open = ImGui::TreeNodeEx(pName, Flags);
+                ImGui::PopStyleVar();
                 if (bDisable) ImGui::EndDisabled();
             }>();
         }
