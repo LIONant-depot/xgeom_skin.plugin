@@ -2,10 +2,12 @@
 // New Types
 < s32:d u32:g s16:C u16:H s8:c u8:h f32:f f64:F string:s wstring:S u64:G s64:D bool:c enum:s >
 
-[ xProperties : 10 ]
+[ xProperties : 12 ]
 { Name:s                            Value:?                   }
 //--------------------------------  -------------------------
   "PipelinePlugin/TypeName"                  ;string "GeomSkin"
+  "PipelinePlugin/Group"                     ;string "Geometry"
+  "PipelinePlugin/Description"               ;string "A skinned mesh: geometry that deforms with a skeleton."
   "PipelinePlugin/FileExtension"             ;wstring "xgeomskin"
   "PipelinePlugin/TypeGUID/Value"            ;u64    #0615D479BCA3267B
   "PipelinePlugin/IconPaths[]"                      ;s64    1
