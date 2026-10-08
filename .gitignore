@@ -418,3 +418,5 @@ FodyWeavers.xsd
 *.msp
 /build/xgeom_skin_compiler.vs2022
 /dependencies
+# Linux: native compiler builds (xLION root CMakeLists.txt, xlion_compilers) and the dependencies link
+/Build/*_compiler.linux/
