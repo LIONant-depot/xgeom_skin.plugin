@@ -12,7 +12,7 @@
 #include "plugins/xgeom_skin.plugin/source/Editor/xgeom_skin_editor_preview.h"
 #include "plugins/xgeom_skin.plugin/source/Editor/xgeom_skin_thumbnail.h"
 #include "plugins/xgeom_skin.plugin/source/xgeom_skin_xgpu_rsc_loader.cpp"      // the resource loader: compiled once, in the host's translation unit
-#include "source/tools/xgpu_imgui_timeline.h"
+#include "source/Tools/xgpu_imgui_timeline.h"
 
 #include <charconv>
 #include <functional>

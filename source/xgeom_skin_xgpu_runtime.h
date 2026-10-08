@@ -2,7 +2,7 @@
 #define XGEOM_SKIN_XGPU_RUNTIME
 #pragma once
 
-#include "source/xgpu.h"
+#include "source/xGPU.h"
 #include "xgeom_skin.h"
 
 namespace xgeom_skin::xgpu
