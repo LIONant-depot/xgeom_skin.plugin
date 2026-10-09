@@ -7,9 +7,11 @@
 // Vertex inputs - stream 0 is the fused position+skin buffer (xgeom_skin::geom::vertex, 12 bytes),
 // stream 1 is vertex_extras (12 bytes)
 //
-layout(location = 0) in ivec3 in_Pos;          // xyz = compressed pos (R16G16B16_SINT)
-layout(location = 1) in uvec4 in_PackedLo;     // m_Packed[0..3] (R8G8B8A8_UINT) - bone offsets + low bits of Weight0
-layout(location = 2) in uint  in_PackedHi;     // m_Packed[4..5] (R16_UINT) - Weight0 high bits, Weight1, Weight2
+layout(location = 0) in ivec3 in_Pos;          // xyz = compressed pos (read as R16G16B16A16_SINT, w = m_Packed[0..1], unused)
+// m_Packed is read as 16 bit words at offsets 6 and 8 of the vertex: D3D12 (Mesa's Vulkan driver under WSL) needs every attribute's offset
+// to be a multiple of min(4, its size), so the 4 bytes at offset 6 it used to read as R8G8B8A8_UINT made the pipeline fail.
+layout(location = 1) in uint  in_PackedLo;     // m_Packed[0..1] (R16_UINT) - bone offsets 0-1, low bits of bone offset 2
+layout(location = 2) in uvec2 in_PackedHi;     // m_Packed[2..5] (R16G16_UINT) - x: rest of the bone offsets + low bits of Weight0, y: Weight0 high bits, Weight1, Weight2
 layout(location = 3) in uvec2 in_UV;           // compressed UV (R16G16_UNORM)
 layout(location = 4) in uvec2 in_OctNormal;    // full-precision oct normal (R16G16_UINT)
 layout(location = 5) in uint  in_OctTangentX;  // full-precision oct tangent X (R16_UINT)
@@ -67,8 +69,8 @@ mb_full_vertex getVertexData()
     //
     // Build this vertex's skin matrix and deform position/normal/tangent from bind pose
     //
-    const uint lo32 = in_PackedLo.x | (in_PackedLo.y << 8) | (in_PackedLo.z << 16) | (in_PackedLo.w << 24);
-    const mat4 Skin = ComputeSkinMatrix(lo32, in_PackedHi, baseBoneIndex, push.maxInfluences);
+    const uint lo32 = in_PackedLo | (in_PackedHi.x << 16);
+    const mat4 Skin = ComputeSkinMatrix(lo32, in_PackedHi.y, baseBoneIndex, push.maxInfluences);
     const mat3 SkinRot = mat3(Skin);
 
     Data.LocalPos    = Skin * bindPos;

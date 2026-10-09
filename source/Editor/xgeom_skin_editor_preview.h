@@ -145,12 +145,18 @@ namespace xgeom_skin_editor::preview
             if (!UBO(m_MeshUBO, sizeof(ubo_geom_skin_mesh)) || !UBO(m_LightUBO, sizeof(ubo_bm_lighting)) || !UBO(m_ShadowUBO, sizeof(ubo_shadow_generation_mesh))) return false;
             if (!Ok(Device.Create(m_BoneMatrices, { .m_Type = xgpu::buffer::type::STORAGE, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(xmath::fmat4), .m_EntryCount = g_MaxBonesSupported }))) return false;
 
-            // Stream 0 is the fused position + skin data (3 x int16 position, 6 packed bytes read back as a uvec4 and a uint16), stream 1 the extras
+            // Stream 0 is the fused position + skin data (3 x int16 position, the 6 packed bytes read back as a uint16 and two uint16), stream 1 the extras.
+            // Formats and offsets every driver takes (Mesa's D3D12 Vulkan driver under WSL refused the old ones and the pipeline failed - the editor asserted):
+            // - the position is read as SINT16_4D, not SINT16_3D: R16G16B16_SINT is optional as a vertex buffer format (and D3D12 has none of the 3 x 16 bit
+            //   formats), R16G16B16A16_SINT is required. Its fourth component is m_Packed[0..1], which the shader's ivec3 input never sees; the stride stays 12
+            //   (xgpu takes it from where the last attribute ends).
+            // - m_Packed is read as UINT16_1D at offset 6 and UINT16_2D at offset 8, not R8G8B8A8_UINT at 6: D3D12 needs an attribute's offset to be a
+            //   multiple of min(4, its size). The shaders (xgeom_skin_mb_input_*.vert) put the same 48 bits back together.
             {
                 auto Attributes = std::array
-                { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_XPos),                      .m_Format = xgpu::vertex_descriptor::format::SINT16_3D,     .m_iStream = 0 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed),                    .m_Format = xgpu::vertex_descriptor::format::UINT8_4D_UINT, .m_iStream = 0 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed) + 4,                .m_Format = xgpu::vertex_descriptor::format::UINT16_1D,     .m_iStream = 0 }
+                { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_XPos),                      .m_Format = xgpu::vertex_descriptor::format::SINT16_4D,     .m_iStream = 0 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed),                    .m_Format = xgpu::vertex_descriptor::format::UINT16_1D,     .m_iStream = 0 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed) + 2,                .m_Format = xgpu::vertex_descriptor::format::UINT16_2D,     .m_iStream = 0 }
                 , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex_extras, m_UV),                 .m_Format = xgpu::vertex_descriptor::format::UINT16_2D,     .m_iStream = 1 }
                 , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex_extras, m_OctNormal),          .m_Format = xgpu::vertex_descriptor::format::UINT16_2D,     .m_iStream = 1 }
                 , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex_extras, m_OctTangentX),        .m_Format = xgpu::vertex_descriptor::format::UINT16_1D,     .m_iStream = 1 }
@@ -161,9 +167,9 @@ namespace xgeom_skin_editor::preview
             // The shadow pass reads stream 0 only
             {
                 auto Attributes = std::array
-                { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_XPos),       .m_Format = xgpu::vertex_descriptor::format::SINT16_3D,     .m_iStream = 0 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed),     .m_Format = xgpu::vertex_descriptor::format::UINT8_4D_UINT, .m_iStream = 0 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed) + 4, .m_Format = xgpu::vertex_descriptor::format::UINT16_1D,     .m_iStream = 0 }
+                { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_XPos),       .m_Format = xgpu::vertex_descriptor::format::SINT16_4D,     .m_iStream = 0 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed),     .m_Format = xgpu::vertex_descriptor::format::UINT16_1D,     .m_iStream = 0 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed) + 2, .m_Format = xgpu::vertex_descriptor::format::UINT16_2D,     .m_iStream = 0 }
                 };
                 if (!Ok(Device.Create(m_ShadowVD, xgpu::vertex_descriptor::setup{ .m_bUseStreaming = true, .m_Topology = xgpu::vertex_descriptor::topology::TRIANGLE_LIST, .m_VertexSize = 0, .m_Attributes = Attributes }))) return false;
             }
