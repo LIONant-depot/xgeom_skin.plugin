@@ -277,13 +277,13 @@ namespace xgeom_skin_editor::preview
                 m_pMeshGeom = &Geom; m_MeshLOD = Settings.m_iLOD; m_MeshMaxInfluences = MaxInfluences;
             }
 
-            // The same light the preview always had: a warm point light at the shadow's light view, softened by its area, with a soft fill
+            // A warm directional key light along the grid shadow's light view (the renderer's shadow clipmap shadows it; its level-0 tiles are
+            // sized to the geometry), with a soft fill
             const float Radius = Geom.m_BBox.getRadius();
             xlionrender::scene Scene;
             if (Geom.m_nVertices) Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_Materials = m_Materials });
-            Scene.m_Light     = { .m_Position = m_LightView.getPosition(), .m_Radius = Radius * 5, .m_AreaRadius = Radius * 0.5f, .m_Temperature = 6500, .m_Intensity = 4 };
-            Scene.m_Ambient   = { 0.7f, 0.7f, 0.7f };
-            Scene.m_W2ShadowT = ClipToTextureSpace() * m_ShadowL2C;
+            Scene.m_Light   = { .m_Direction = m_Center - m_LightView.getPosition(), .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
+            Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
             m_Renderer.Render(Window, Scene, m_RenderView, m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawGrid(CmdBuffer); });
         }
