@@ -282,7 +282,7 @@ namespace xgeom_skin_editor::preview
             const float Radius = Geom.m_BBox.getRadius();
             xlionrender::scene Scene;
             if (Geom.m_nVertices) Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_Materials = m_Materials });
-            Scene.m_Light   = { .m_Direction = m_Center - m_LightView.getPosition(), .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
+            Scene.m_Sun     = { .m_Direction = m_Center - m_LightView.getPosition(), .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
             m_Renderer.Render(Window, Scene, m_RenderView, m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawGrid(CmdBuffer); });
