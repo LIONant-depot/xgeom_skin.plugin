@@ -3,8 +3,9 @@
 #pragma once
 
 // The Skin Geom editor's 3D preview: the skinned geometry lit and deformed by the pose of its skeleton (rest pose, bind pose, or an animation
-// playing), with the ground grid receiving its shadow. The light's view is drawn into the shadow map first, with a render pass on the window
-// before the frame's UI is rendered; the geometry is then drawn from the preview panel's render callback.
+// playing), with the ground grid receiving its shadow. Kept in step with the static geom preview: the light's view goes into the shadow map,
+// then xLIONRender draws the skinned geometry (its skin vertex path, the materials' HDR variants, tone mapped) into this runtime's render_view,
+// with the grid as the overlay; all before the frame's UI is rendered. The panel then blits the view's output.
 #include "plugins/xskeleton.plugin/source/Editor/xskeleton_editor_scene.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_xgpu_rsc_loader.h"
 #include "plugins/xmaterial.plugin/source/xmaterial_runtime.h"
@@ -18,18 +19,11 @@
 #include "plugins/xgeom_skin.plugin/source/xgeom_skin_xgpu_rsc_loader.h"
 #include "plugins/xgeom_skin.plugin/source/xgeom_skin_xgpu_runtime.h"
 #include "dependencies/xproperty/source/xcore/my_properties.h"
+#include "dependencies/xLIONRender/src/xlionrender.h"
 
 namespace xgeom_skin_editor::preview
 {
-    // The two skin shaders every skin geometry is drawn with (compiled with the plugin), and the one that casts its shadow
-    inline constexpr std::uint32_t g_GeomSkinVertShader[] =
-    {
-        #include "GeomSkinBasicShader_vert.h"
-    };
-    inline constexpr std::uint32_t g_GeomSkinFragShader[] =
-    {
-        #include "GeomSkinBasicShader_frag.h"
-    };
+    // The shaders that cast the skinned geometry's shadow (the lit geometry is xLIONRender's skin vertex path)
     inline constexpr std::uint32_t g_ShadowVertShader[] =
     {
         #include "GeomSkinShadowMapCreation_vert.h"
@@ -37,22 +31,6 @@ namespace xgeom_skin_editor::preview
     inline constexpr std::uint32_t g_ShadowFragShader[] =
     {
         #include "GeomSkinShadowMapCreation_frag.h"
-    };
-
-    struct alignas(256) ubo_geom_skin_mesh
-    {
-        xmath::fmat4    m_L2w;
-        xmath::fmat4    m_w2C;
-        xmath::fmat4    m_w2ShadowT;    // read by the shadow lookup of both skin fragment shaders: a real clip-to-shadow-texture matrix, not zero, or shadowing silently does nothing
-    };
-
-    struct alignas(256) ubo_bm_lighting
-    {
-        xmath::fvec4    m_LightColor;
-        xmath::fvec4    m_AmbientLightColor;
-        xmath::fvec4    m_wSpaceLightPos;
-        xmath::fvec4    m_wSpaceEyePos;
-        xmath::fvec4    m_LightParams;
     };
 
     // The shadow caster only needs the light's local-to-clip matrix
@@ -102,29 +80,22 @@ namespace xgeom_skin_editor::preview
 
         xgpu::tools::view           m_LightView;
 
-        xgpu::buffer                m_MeshUBO, m_LightUBO, m_ShadowUBO, m_BoneMatrices;
-        xgpu::vertex_descriptor     m_SkinVD, m_ShadowVD;
-        xgpu::shader                m_SkinVert;
-        xgpu::pipeline              m_SkinPipeline, m_ShadowPipeline;
-        xgpu::pipeline_instance     m_DefaultInstance, m_ShadowInstance;
+        xgpu::buffer                m_ShadowUBO, m_BoneMatrices;
+        xgpu::vertex_descriptor     m_ShadowVD;
+        xgpu::pipeline              m_ShadowPipeline;
+        xgpu::pipeline_instance     m_ShadowInstance;
 
-        // One entry per material of the geometry: what a submesh draws with. Rebuilt with the geometry.
-        std::vector<xgpu::pipeline_instance>        m_MatInstances;
-        std::vector<xgpu::pipeline>                 m_MatPipelines;
-        std::vector<xrsc::material_instance_ref>    m_MatRefs;
+        // The renderer the lit geometry goes through (one instance per runtime: the preview and each thumbnail renderer own theirs)
+        xlionrender::instance                   m_Renderer;
+        xlionrender::render_view                m_RenderView;
+        xlionrender::mesh_id                    m_Mesh;                 // the geometry, at m_MeshLOD / m_MeshMaxInfluences
+        const geom*                             m_pMeshGeom          = nullptr;
+        int                                     m_MeshLOD            = -1;
+        int                                     m_MeshMaxInfluences  = -1;
+        std::vector<xlionrender::material_id>   m_Materials;            // one per material slot of the geometry
+        std::vector<xrsc::material_instance_ref> m_MatRefs;             // held while m_Materials uses their shaders and textures
 
         std::vector<xmath::fmat4>                   m_SkinMatrices;
-
-        // The bindings every skin pipeline shares: per-draw mesh block, lighting, the cluster table and the bone matrices
-        static auto SkinBinds() noexcept
-        {
-            return std::array
-            { xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex   = true }, .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC }
-            , xgpu::pipeline::uniform_binds{ .m_BindIndex = 1, .m_Usage = { .m_bFragment = true }, .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC }
-            , xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex   = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }
-            , xgpu::pipeline::uniform_binds{ .m_BindIndex = 1, .m_Usage = { .m_bVertex   = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }
-            };
-        }
 
         template<std::size_t N>
         static xgpu::shader::setup ShaderSetup(xgpu::shader::type::bit Type, const std::uint32_t (&Code)[N]) noexcept
@@ -141,30 +112,14 @@ namespace xgeom_skin_editor::preview
             m_LightView.setFov(50_xdeg);
             m_LightView.setViewport({ 0, 0, m_ShadowMap.getTextureDimensions()[0], m_ShadowMap.getTextureDimensions()[1] });
 
-            auto UBO = [&](xgpu::buffer& B, int Size) { return Ok(Device.Create(B, { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = Size, .m_EntryCount = 100 })); };
-            if (!UBO(m_MeshUBO, sizeof(ubo_geom_skin_mesh)) || !UBO(m_LightUBO, sizeof(ubo_bm_lighting)) || !UBO(m_ShadowUBO, sizeof(ubo_shadow_generation_mesh))) return false;
+            if (!Ok(m_Renderer.Init(Device))) return false;
+            m_RenderView.m_Background = { 0.45f, 0.45f, 0.45f, 1.0f };     // the grey the preview and the thumbnails always had
+
+            if (!Ok(Device.Create(m_ShadowUBO, { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(ubo_shadow_generation_mesh), .m_EntryCount = 100 }))) return false;
             if (!Ok(Device.Create(m_BoneMatrices, { .m_Type = xgpu::buffer::type::STORAGE, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(xmath::fmat4), .m_EntryCount = g_MaxBonesSupported }))) return false;
 
-            // Stream 0 is the fused position + skin data (3 x int16 position, the 6 packed bytes read back as a uint16 and two uint16), stream 1 the extras.
-            // Formats and offsets every driver takes (Mesa's D3D12 Vulkan driver under WSL refused the old ones and the pipeline failed - the editor asserted):
-            // - the position is read as SINT16_4D, not SINT16_3D: R16G16B16_SINT is optional as a vertex buffer format (and D3D12 has none of the 3 x 16 bit
-            //   formats), R16G16B16A16_SINT is required. Its fourth component is m_Packed[0..1], which the shader's ivec3 input never sees; the stride stays 12
-            //   (xgpu takes it from where the last attribute ends).
-            // - m_Packed is read as UINT16_1D at offset 6 and UINT16_2D at offset 8, not R8G8B8A8_UINT at 6: D3D12 needs an attribute's offset to be a
-            //   multiple of min(4, its size). The shaders (xgeom_skin_mb_input_*.vert) put the same 48 bits back together.
-            {
-                auto Attributes = std::array
-                { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_XPos),                      .m_Format = xgpu::vertex_descriptor::format::SINT16_4D,     .m_iStream = 0 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed),                    .m_Format = xgpu::vertex_descriptor::format::UINT16_1D,     .m_iStream = 0 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed) + 2,                .m_Format = xgpu::vertex_descriptor::format::UINT16_2D,     .m_iStream = 0 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex_extras, m_UV),                 .m_Format = xgpu::vertex_descriptor::format::UINT16_2D,     .m_iStream = 1 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex_extras, m_OctNormal),          .m_Format = xgpu::vertex_descriptor::format::UINT16_2D,     .m_iStream = 1 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex_extras, m_OctTangentX),        .m_Format = xgpu::vertex_descriptor::format::UINT16_1D,     .m_iStream = 1 }
-                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex_extras, m_OctTangentY_Sign),   .m_Format = xgpu::vertex_descriptor::format::UINT16_1D,     .m_iStream = 1 }
-                };
-                if (!Ok(Device.Create(m_SkinVD, xgpu::vertex_descriptor::setup{ .m_bUseStreaming = true, .m_Topology = xgpu::vertex_descriptor::topology::TRIANGLE_LIST, .m_VertexSize = 0, .m_Attributes = Attributes }))) return false;
-            }
-            // The shadow pass reads stream 0 only
+            // The shadow pass reads stream 0 only (the fused position + skin data: 3 x int16 position, the 6 packed bytes read back as a uint16
+            // and two uint16 - formats every driver takes; see xLIONRender's skin vertex descriptor for the whole layout)
             {
                 auto Attributes = std::array
                 { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_XPos),       .m_Format = xgpu::vertex_descriptor::format::SINT16_4D,     .m_iStream = 0 }
@@ -191,52 +146,37 @@ namespace xgeom_skin_editor::preview
                 if (!Ok(Device.Create(m_ShadowInstance, { .m_PipeLine = m_ShadowPipeline }))) return false;
             }
 
-            // A submesh with no material of its own is drawn with a white diffuse texture
-            if (!Ok(Device.Create(m_SkinVert, ShaderSetup(xgpu::shader::type::bit::VERTEX, g_GeomSkinVertShader)))) return false;
-            {
-                xgpu::shader Frag;
-                if (!Ok(Device.Create(Frag, ShaderSetup(xgpu::shader::type::bit::FRAGMENT, g_GeomSkinFragShader)))) return false;
-                auto Shaders  = std::array<const xgpu::shader*, 2>{ &Frag, &m_SkinVert };
-                auto Samplers = std::array{ xgpu::pipeline::sampler{} };
-                auto Binds    = SkinBinds();
-                if (!Ok(Device.Create(m_SkinPipeline, xgpu::pipeline::setup{ .m_VertexDescriptor = m_SkinVD, .m_Shaders = Shaders, .m_PushConstantsSize = sizeof(geom_skin_push_const), .m_UniformBinds = Binds, .m_Samplers = Samplers }))) return false;
-                auto Bindings = std::array{ xgpu::pipeline_instance::sampler_binding{ m_White } };
-                if (!Ok(Device.Create(m_DefaultInstance, { .m_PipeLine = m_SkinPipeline, .m_SamplersBindings = Bindings }))) return false;
-            }
-
             m_bReady = true;
             return true;
         }
 
         void ReleaseMaterials() noexcept
         {
-            if (m_pDevice)
-            {
-                for (auto& E : m_MatInstances) xeditor::DestroyGpu(m_pDevice, E);
-                for (auto& E : m_MatPipelines) xeditor::DestroyGpu(m_pDevice, E);
-            }
+            for (auto& E : m_Materials) m_Renderer.DestroyMaterial(E);
             for (auto& E : m_MatRefs) xresource::g_Mgr.ReleaseRef(E);
-            m_MatInstances.clear();
-            m_MatPipelines.clear();
+            m_Materials.clear();
             m_MatRefs.clear();
+            m_Renderer.DestroyMesh(m_Mesh);
+            m_pMeshGeom = nullptr;
         }
 
         void Release() noexcept
         {
             ReleaseMaterials();
-            xeditor::DestroyGpu(m_pDevice, m_DefaultInstance, m_ShadowInstance, m_SkinPipeline, m_ShadowPipeline);
+            if (m_bReady) m_Renderer.DestroyView(m_RenderView);
+            xeditor::DestroyGpu(m_pDevice, m_ShadowInstance, m_ShadowPipeline);
             scene::Release();
         }
 
-        // The pipeline instance of every material of the geometry (after each (re)load of the compiled resource). A material instance builds its
-        // pipeline from its own material's shader; one without a material draws with the white texture.
+        // The renderer's material of every material slot of the geometry (after each (re)load of the compiled resource): the material's HDR
+        // shader with the shadow map in slot 0 and the material instance's textures after it (white where one does not resolve); the
+        // renderer's default material (white diffuse) when the slot has no material. The mesh itself is made by Render (it depends on the LOD).
         void RebuildMaterials(geom& Geom) noexcept
         {
             ReleaseMaterials();
             const auto Materials = Geom.getDefaultMaterialInstances();
-            m_MatInstances.resize(Materials.size());
+            m_Materials.resize(Materials.size());
             m_MatRefs.resize(Materials.size());
-            m_MatPipelines.reserve(Materials.size());
 
             for (auto& MI : Materials)
             {
@@ -248,31 +188,19 @@ namespace xgeom_skin_editor::preview
 
                 if (pMI && pMat && pMI->m_nTexturesList > 0)
                 {
-                    // Slot 0 of every material is the shadow map
-                    std::vector<xgpu::pipeline_instance::sampler_binding> Bindings;
-                    Bindings.reserve(pMI->m_nTexturesList);
+                    std::vector<xgpu::texture*> Textures;
+                    Textures.reserve(pMI->m_nTexturesList);
                     for (auto& E : pMI->getTextures())
                     {
-                        if (&E == pMI->getTextures().data()) { Bindings.emplace_back(m_ShadowMap); continue; }
+                        if (&E == pMI->getTextures().data()) { Textures.push_back(&m_ShadowMap); continue; }
                         auto* pTexture = xresource::g_Mgr.getResource(E.m_TexureRef);
-                        Bindings.emplace_back(pTexture ? *pTexture : m_White);
+                        Textures.push_back(pTexture ? pTexture : &m_White);
                     }
-
-                    std::vector<xgpu::pipeline::sampler> Samplers(pMI->m_nTexturesList);
-                    Samplers[0] = xgpu::pipeline::sampler{ .m_AddressMode = std::array{ xgpu::pipeline::sampler::address_mode::CLAMP, xgpu::pipeline::sampler::address_mode::CLAMP, xgpu::pipeline::sampler::address_mode::CLAMP } };
-
-                    // The pipeline is this editor's own: the material keeps a single slot for its pipeline and static geometry already uses it
-                    auto& NewPipeline = m_MatPipelines.emplace_back();
-                    auto  Shaders     = std::array<const xgpu::shader*, 2>{ &pMat->getShader(), &m_SkinVert };
-                    auto  Binds       = SkinBinds();
-                    if (!Ok(m_pDevice->Create(NewPipeline, xgpu::pipeline::setup{ .m_VertexDescriptor = m_SkinVD, .m_Shaders = Shaders, .m_PushConstantsSize = sizeof(geom_skin_push_const), .m_UniformBinds = Binds, .m_Samplers = Samplers }))) continue;
-                    Ok(m_pDevice->Create(m_MatInstances[Index], { .m_PipeLine = NewPipeline, .m_SamplersBindings = Bindings }));
+                    if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures))) continue;
                 }
-                else
-                {
-                    auto Bindings = std::array{ xgpu::pipeline_instance::sampler_binding{ m_White } };
-                    Ok(m_pDevice->Create(m_MatInstances[Index], { .m_PipeLine = m_SkinPipeline, .m_SamplersBindings = Bindings }));
-                }
+
+                const auto Textures = std::array<xgpu::texture*, 2>{ &m_ShadowMap, &m_White };
+                (void)Ok(m_Renderer.CreateDefaultMaterial(m_Materials[Index], Textures));
             }
         }
 
@@ -330,57 +258,34 @@ namespace xgeom_skin_editor::preview
             }
         }
 
-        // The ground with the shadow on it, then the skinned geometry. From inside the panel's render callback.
-        void DrawGeom(xgpu::cmd_buffer& CmdBuffer, geom& Geom, const render_settings& Settings) noexcept
+        // The skinned geometry through xLIONRender into m_RenderView (ViewW x ViewH) with the grid over it. Opens render passes on the window:
+        // call after RenderShadow, before the frame's UI is rendered; then show m_RenderView.m_Output with m_Renderer.Blit.
+        void Render(xgpu::window& Window, geom& Geom, const render_settings& Settings, float ViewW, float ViewH) noexcept
         {
-            if (!m_bReady) return;
-            DrawGrid(CmdBuffer);
-            if (Geom.m_nVertices == 0) return;
+            if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f) return;
 
-            // The geometry is drawn relative to the camera, for precision: its matrices are shifted by the camera position and back
-            const auto CameraPos = m_View.getPosition();
-            const auto L2w       = xmath::fmat4::fromTranslation(-CameraPos);
-            const auto w2C       = m_View.getW2C() * xmath::fmat4::fromTranslation(CameraPos);
+            const int W = static_cast<int>(ViewW), H = static_cast<int>(ViewH);
+            if (m_RenderView.m_Width != W || m_RenderView.m_Height != H)
+                if (!Ok(m_Renderer.CreateView(m_RenderView, { .m_Width = W, .m_Height = H }))) return;
 
-            CmdBuffer.setStreamingBuffers({ &Geom.IndexBuffer(), 3 });
-
-            auto& MeshUBO = m_MeshUBO.allocEntry<ubo_geom_skin_mesh>();
-            MeshUBO.m_L2w       = L2w;
-            MeshUBO.m_w2C       = w2C;
-            MeshUBO.m_w2ShadowT = ClipToTextureSpace() * m_ShadowL2C;
-
-            auto& Lighting = m_LightUBO.allocEntry<ubo_bm_lighting>();
-            Lighting.m_LightColor        = xmath::fvec4(1) * 4;
-            Lighting.m_AmbientLightColor = xmath::fvec4(1) * 0.7f;
-            Lighting.m_wSpaceLightPos    = xmath::fvec4(m_LightView.getPosition() - CameraPos, Geom.m_BBox.getRadius() * 5);
-            Lighting.m_wSpaceEyePos      = xmath::fvec4(0);
-            Lighting.m_LightParams.m_X   = Lighting.m_wSpaceLightPos.m_W * 0.1f;
-            Lighting.m_LightParams.m_Y   = 6500;      // temperature
-            Lighting.m_LightParams.m_Z   = 1;         // intensity boost
-            Lighting.m_LightParams.m_W   = 0;
-
-            const std::uint32_t MaxInfluences = static_cast<std::uint32_t>(std::clamp(Settings.m_MaxInfluences, 1, 4));
-            std::array StaticSSBO{ &Geom.ClusterBuffer(), &m_BoneMatrices };
-            for (auto& M : Geom.getMeshes())
+            // The renderer's mesh follows the geometry, its LOD and how many bone weights are used
+            const int MaxInfluences = std::clamp(Settings.m_MaxInfluences, 1, 4);
+            if (Geom.m_nVertices && (m_pMeshGeom != &Geom || m_MeshLOD != Settings.m_iLOD || m_MeshMaxInfluences != MaxInfluences))
             {
-                const int UseLOD = std::clamp(Settings.m_iLOD, 0, int(M.m_nLODs) - 1);
-                auto&     L      = Geom.getLODs()[M.m_iLOD + UseLOD];
-                for (auto& S : Geom.getSubmeshes().subspan(L.m_iSubmesh, L.m_nSubmesh))
-                {
-                    auto& Instance = (S.m_iMaterial < m_MatInstances.size() && m_MatInstances[S.m_iMaterial].m_Private) ? m_MatInstances[S.m_iMaterial] : m_DefaultInstance;
-                    CmdBuffer.setPipelineInstance(Instance, StaticSSBO);
-                    CmdBuffer.setDynamicUBO(m_MeshUBO, 0);
-                    CmdBuffer.setDynamicUBO(m_LightUBO, 1);
-
-                    geom_skin_push_const PushConst{ .m_ClusterIndex = S.m_iCluster, .m_MaxInfluences = MaxInfluences };
-                    for (auto& C : Geom.getClusters().subspan(S.m_iCluster, S.m_nCluster))
-                    {
-                        CmdBuffer.setPushConstants(PushConst);
-                        CmdBuffer.Draw(C.m_nIndices, C.m_iIndex, C.m_iVertex);
-                        PushConst.m_ClusterIndex++;
-                    }
-                }
+                m_Renderer.DestroyMesh(m_Mesh);
+                if (!Ok(m_Renderer.CreateClusterGeom(m_Mesh, xlionrender::MakeSkinGeom(Geom, m_BoneMatrices, Settings.m_iLOD, MaxInfluences)))) return;
+                m_pMeshGeom = &Geom; m_MeshLOD = Settings.m_iLOD; m_MeshMaxInfluences = MaxInfluences;
             }
+
+            // The same light the preview always had: a warm point light at the shadow's light view, softened by its area, with a soft fill
+            const float Radius = Geom.m_BBox.getRadius();
+            xlionrender::scene Scene;
+            if (Geom.m_nVertices) Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_Materials = m_Materials });
+            Scene.m_Light     = { .m_Position = m_LightView.getPosition(), .m_Radius = Radius * 5, .m_AreaRadius = Radius * 0.5f, .m_Temperature = 6500, .m_Intensity = 4 };
+            Scene.m_Ambient   = { 0.7f, 0.7f, 0.7f };
+            Scene.m_W2ShadowT = ClipToTextureSpace() * m_ShadowL2C;
+
+            m_Renderer.Render(Window, Scene, m_RenderView, m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawGrid(CmdBuffer); });
         }
     };
 }

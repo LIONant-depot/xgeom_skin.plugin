@@ -37,15 +37,6 @@ namespace xgeom_skin_editor
         {
             if (m_bReady) return true;
             if (!m_Runtime.Init(Device)) return false;   // always shadow-enabled internally (runtime::Init hardcodes scene::Init(Device, true))
-
-            const int Cell = static_cast<int>(s_CellPixels);
-            if (!Ok(Device.Create(m_ColorTarget, { .m_Format = xgpu::texture::format::R8G8B8A8_UNORM, .m_Width = Cell, .m_Height = Cell, .m_isGamma = false }))) return false;
-            if (!Ok(Device.Create(m_DepthTarget, { .m_Format = xgpu::texture::format::DEPTH_U16,      .m_Width = Cell, .m_Height = Cell, .m_isGamma = false }))) return false;
-            {
-                auto Attachments = std::array<xgpu::renderpass::attachment, 2>{ { m_ColorTarget, m_DepthTarget } };
-                if (!Ok(Device.Create(m_Pass, { .m_Attachments = Attachments }))) return false;
-            }
-
             m_bReady = true;
             return true;
         }
@@ -105,14 +96,11 @@ namespace xgeom_skin_editor
             const preview::render_settings RenderSettings{ .m_iLOD = 0, .m_MaxInfluences = 4, .m_PoseType = preview::pose_type::FROZEN_POSE };
             m_Runtime.RenderShadow(Window, *pGeom, RenderSettings);
 
-            {
-                // cmd_buffer's own destructor ends the render pass - see xgeom_static_thumbnail.h's
-                // identical comment on why this is scoped to end before the readback below.
-                auto CmdBuffer = Window.StartRenderPass(m_Pass);
-                m_Runtime.DrawGeom(CmdBuffer, *pGeom, RenderSettings);
-            }
+            // The lit geometry (xLIONRender) and the grid, each its own render pass, all ended when Render returns
+            m_Runtime.Render(Window, *pGeom, RenderSettings, s_CellPixels, s_CellPixels);
+            if (!m_Runtime.m_RenderView.m_Output.m_Private) return false;
 
-            (void)Window.ReadbackTexture(m_ColorTarget, m_ReadbackPixels, m_ReadbackWidth, m_ReadbackHeight, m_bReadbackDone);
+            (void)Window.ReadbackTexture(m_Runtime.m_RenderView.m_Output, m_ReadbackPixels, m_ReadbackWidth, m_ReadbackHeight, m_bReadbackDone);
             m_bBusy    = true;
             m_BusyGuid = Guid;
             return false;
@@ -171,9 +159,6 @@ namespace xgeom_skin_editor
         bool                                                     m_bReady = false;
         std::vector<xmath::fmat4>                                m_PoseWorlds;
 
-        xgpu::texture                                            m_ColorTarget;
-        xgpu::texture                                            m_DepthTarget;
-        xgpu::renderpass                                         m_Pass;
         bool                                                     m_bBusy          = false;
         xresource::full_guid                                     m_BusyGuid       {};
         std::vector<std::uint32_t>                               m_ReadbackPixels;

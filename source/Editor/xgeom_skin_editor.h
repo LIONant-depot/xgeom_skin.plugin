@@ -453,11 +453,15 @@ namespace xgeom_skin_editor
             m_Preview.UploadBones(*pSkeleton, m_PoseWorlds, m_Settings.m_PoseType);
             m_Preview.RenderShadow(*pWindow, *pGeom, m_Settings);
 
+            // Drawn by xLIONRender into the preview's own view, then blitted as is into the panel (ImGui::Image would gamma encode the
+            // already display-encoded output again). The clip rect is the viewport the render callback gets.
+            m_Preview.Render(*pWindow, *pGeom, m_Settings, Avail.x, Avail.y);
+            ImGui::PushClipRect(Min, ImVec2(Min.x + Avail.x, Min.y + Avail.y), true);
             xgpu::tools::imgui::AddCustomRenderCallback([this](xgpu::cmd_buffer& CmdBuffer, const ImVec2&, const ImVec2&)
             {
-                if (!m_bOpen || !m_bHasGeom) return;
-                if (auto* p = xresource::g_Mgr.getResource(m_GeomRef)) m_Preview.DrawGeom(CmdBuffer, *p, m_Settings);
+                if (m_bOpen) m_Preview.m_Renderer.Blit(CmdBuffer, m_Preview.m_RenderView);
             });
+            ImGui::PopClipRect();
         }
 
         void RenderPlayback() noexcept
