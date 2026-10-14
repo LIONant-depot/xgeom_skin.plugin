@@ -12,6 +12,7 @@
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_runtime.h"
 #include "plugins/xanim_package.plugin/source/xanim_package.h"
+#include "plugins/xtexture.plugin/source/xtexture_xgpu_rsc_loader.h"
 #include "plugins/xanim_package.plugin/source/xanim_package_xgpu_rsc_loader.h"
 #include "plugins/xgeom_skin.plugin/source/xgeom_skin.h"
 #include "plugins/xgeom_skin.plugin/source/xgeom_skin_descriptor.h"
@@ -31,6 +32,38 @@ namespace xgeom_skin_editor::preview
     inline constexpr std::uint32_t g_ShadowFragShader[] =
     {
         #include "GeomSkinShadowMapCreation_frag.h"
+    };
+
+    // The wire frame and the tangent / binormal / normal lines: the skinned vertex through Static Geom's geometry and fragment shaders
+    inline constexpr std::uint32_t g_WireVertShader[]   = {
+        #include "xgeom_skin_wireframe_vert.h"
+    };
+    inline constexpr std::uint32_t g_WireGeomShader[]   = {
+        #include "xgeom_static_wireframe_geom.h"
+    };
+    inline constexpr std::uint32_t g_WireFragShader[]   = {
+        #include "xgeom_static_wireframe_frag.h"
+    };
+    inline constexpr std::uint32_t g_NormalVertShader[] = {
+        #include "xgeom_skin_debug_normal_vert.h"
+    };
+    inline constexpr std::uint32_t g_NormalGeomShader[] = {
+        #include "xgeom_static_debug_normal_geom.h"
+    };
+    inline constexpr std::uint32_t g_NormalFragShader[] = {
+        #include "xgeom_static_debug_normal_frag.h"
+    };
+
+    struct alignas(256) ubo_wireframe_mesh
+    {
+        xmath::fmat4    m_L2w;          // local -> camera-centered world
+        xmath::fmat4    m_w2C;          // camera-centered world -> clip
+    };
+    struct alignas(256) ubo_debug_normal_mesh
+    {
+        xmath::fmat4    m_L2C;
+        xmath::fvec4    m_ScaleFactor;  // the frame axis to draw (x tangent, y binormal, z normal), w the largest depth
+        xmath::fvec4    m_Color;
     };
 
     // The shadow caster only needs the light's local-to-clip matrix
@@ -63,6 +96,13 @@ namespace xgeom_skin_editor::preview
         int                 m_iLOD           = 0;
         int                 m_MaxInfluences  = 4;
         pose_type           m_PoseType       = pose_type::ANIMATION_POSE;
+        xrsc::texture_ref   m_Environment    = {};      // a cubemap: lights the geometry instead of the flat fill (empty: the flat fill)
+        bool                m_bWireFrame     = false;
+        bool                m_bTangents      = false;
+        bool                m_bBinormals     = false;
+        bool                m_bNormals       = false;
+        bool                m_bGridToYMin    = true;
+        float               m_GridYMin       = 0;
 
         XPROPERTY_DEF
         ( "RenderSettings", render_settings
@@ -70,6 +110,18 @@ namespace xgeom_skin_editor::preview
         , obj_member<"LOD",            &render_settings::m_iLOD >
         , obj_member<"MaxInfluences",  &render_settings::m_MaxInfluences >
         , obj_member<"Pose Type",      &render_settings::m_PoseType, member_enum_span<pose_type_v> >
+        , obj_member<"Environment",    &render_settings::m_Environment, member_help<"A cubemap texture (HDR or not) that lights the geometry: the diffuse and the reflections by roughness.\n"
+                                                                                    "Empty: the flat fill. A texture that is not a cubemap is ignored.">>
+        , obj_scope< "Debug Geometry"
+            , obj_member<"WireFrame",    &render_settings::m_bWireFrame, member_help<"Render the skinned geometry's wire frame (the pose's deformation included)">>
+            , obj_member<"Tangents",     &render_settings::m_bTangents,  member_help<"Render tangent vectors as debug lines (red)">>
+            , obj_member<"Binormals",    &render_settings::m_bBinormals, member_help<"Render binormal vectors as debug lines (green)">>
+            , obj_member<"Normals",      &render_settings::m_bNormals,   member_help<"Render normal vectors as debug lines (blue)">>
+            >
+        , obj_scope< "Grid"
+            , obj_member<"SetToGeomYMin", &render_settings::m_bGridToYMin, member_help<"Align the grid plane to the geometry's minimum Y position (ground level)">>
+            , obj_member<"GeomYMin",      &render_settings::m_GridYMin, member_flags<flags::SHOW_READONLY>, member_help<"Y coordinate where the grid plane is positioned when SetToGeomYMin is enabled">>
+            >
         )
     };
     XPROPERTY_REG(render_settings)
@@ -85,6 +137,12 @@ namespace xgeom_skin_editor::preview
         xgpu::pipeline              m_ShadowPipeline;
         xgpu::pipeline_instance     m_ShadowInstance;
 
+        // The debug overlays: the wire frame (stream 0 only, like the shadow) and the frame lines (the whole skin vertex)
+        xgpu::vertex_descriptor     m_FullVD;
+        xgpu::buffer                m_WireUBO, m_NormalUBO;
+        xgpu::pipeline              m_WirePipeline, m_NormalPipeline;
+        xgpu::pipeline_instance     m_WireInstance, m_NormalInstance;
+
         // The renderer the lit geometry goes through (one instance per runtime: the preview and each thumbnail renderer own theirs)
         xlionrender::instance                   m_Renderer;
         xlionrender::render_view                m_RenderView;
@@ -94,6 +152,8 @@ namespace xgeom_skin_editor::preview
         int                                     m_MeshMaxInfluences  = -1;
         std::vector<xlionrender::material_id>   m_Materials;            // one per material slot of the geometry
         std::vector<xrsc::material_instance_ref> m_MatRefs;             // held while m_Materials uses their shaders and textures
+        xrsc::texture_ref                       m_EnvRef{};             // the environment cubemap (render_settings::m_Environment), held while lit by it
+        std::uint64_t                           m_EnvInstance        = 0;
 
         std::vector<xmath::fmat4>                   m_SkinMatrices;
 
@@ -146,6 +206,49 @@ namespace xgeom_skin_editor::preview
                 if (!Ok(Device.Create(m_ShadowInstance, { .m_PipeLine = m_ShadowPipeline }))) return false;
             }
 
+            // The wire frame: the shadow's position-only vertex through the static wire frame's geometry shader. The overlay pass depth-tests
+            // against the renderer's scene and the wire lies on that surface, so it is pulled toward the camera
+            {
+                if (!Ok(Device.Create(m_WireUBO,   { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(ubo_wireframe_mesh),    .m_EntryCount = 100 }))) return false;
+                if (!Ok(Device.Create(m_NormalUBO, { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(ubo_debug_normal_mesh), .m_EntryCount = 100 }))) return false;
+                auto Binds = std::array
+                { xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC }
+                , xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }
+                , xgpu::pipeline::uniform_binds{ .m_BindIndex = 1, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }
+                };
+                xgpu::shader Frag, Geom, Vert;
+                if (!Ok(Device.Create(Frag, ShaderSetup(xgpu::shader::type::bit::FRAGMENT, g_WireFragShader)))) return false;
+                if (!Ok(Device.Create(Geom, ShaderSetup(xgpu::shader::type::bit::GEOMETRY, g_WireGeomShader)))) return false;
+                if (!Ok(Device.Create(Vert, ShaderSetup(xgpu::shader::type::bit::VERTEX,   g_WireVertShader)))) return false;
+                auto Shaders = std::array<const xgpu::shader*, 3>{ &Frag, &Geom, &Vert };
+                xgpu::pipeline::setup Setup{ .m_VertexDescriptor = m_ShadowVD, .m_Shaders = Shaders, .m_PushConstantsSize = sizeof(geom_skin_push_const), .m_UniformBinds = Binds, .m_Blend = xgpu::pipeline::blend::getAlphaOriginal() };
+                Setup.m_DepthStencil.m_DepthBiasConstantFactor = -4.0f;
+                Setup.m_DepthStencil.m_DepthBiasSlopeFactor    = -2.0f;
+                Setup.m_DepthStencil.m_bDepthBiasEnable        = true;
+                Setup.m_DepthStencil.m_bDepthWriteEnable       = false;
+                if (!Ok(Device.Create(m_WirePipeline, Setup))) return false;
+                if (!Ok(Device.Create(m_WireInstance, { .m_PipeLine = m_WirePipeline }))) return false;
+
+                // The frame lines: stream 0 (position + skin) and stream 1 (UV, oct normal, oct tangent)
+                auto Attributes = std::array
+                { xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_XPos),       .m_Format = xgpu::vertex_descriptor::format::SINT16_4D, .m_iStream = 0 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed),     .m_Format = xgpu::vertex_descriptor::format::UINT16_1D, .m_iStream = 0 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = offsetof(xgeom_skin::geom::vertex, m_Packed) + 2, .m_Format = xgpu::vertex_descriptor::format::UINT16_2D, .m_iStream = 0 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = 0,  .m_Format = xgpu::vertex_descriptor::format::UINT16_2D, .m_iStream = 1 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = 4,  .m_Format = xgpu::vertex_descriptor::format::UINT16_2D, .m_iStream = 1 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = 8,  .m_Format = xgpu::vertex_descriptor::format::UINT16_1D, .m_iStream = 1 }
+                , xgpu::vertex_descriptor::attribute{ .m_Offset = 10, .m_Format = xgpu::vertex_descriptor::format::UINT16_1D, .m_iStream = 1 }
+                };
+                if (!Ok(Device.Create(m_FullVD, xgpu::vertex_descriptor::setup{ .m_bUseStreaming = true, .m_Topology = xgpu::vertex_descriptor::topology::TRIANGLE_LIST, .m_VertexSize = 0, .m_Attributes = Attributes }))) return false;
+                xgpu::shader NFrag, NGeom, NVert;
+                if (!Ok(Device.Create(NFrag, ShaderSetup(xgpu::shader::type::bit::FRAGMENT, g_NormalFragShader)))) return false;
+                if (!Ok(Device.Create(NGeom, ShaderSetup(xgpu::shader::type::bit::GEOMETRY, g_NormalGeomShader)))) return false;
+                if (!Ok(Device.Create(NVert, ShaderSetup(xgpu::shader::type::bit::VERTEX,   g_NormalVertShader)))) return false;
+                auto NShaders = std::array<const xgpu::shader*, 3>{ &NFrag, &NVert, &NGeom };
+                if (!Ok(Device.Create(m_NormalPipeline, xgpu::pipeline::setup{ .m_VertexDescriptor = m_FullVD, .m_Shaders = NShaders, .m_PushConstantsSize = sizeof(geom_skin_push_const), .m_UniformBinds = Binds, .m_Blend = xgpu::pipeline::blend::getAlphaOriginal() }))) return false;
+                if (!Ok(Device.Create(m_NormalInstance, { .m_PipeLine = m_NormalPipeline }))) return false;
+            }
+
             m_bReady = true;
             return true;
         }
@@ -163,8 +266,10 @@ namespace xgeom_skin_editor::preview
         void Release() noexcept
         {
             ReleaseMaterials();
+            xresource::g_Mgr.ReleaseRef(m_EnvRef);
+            m_EnvInstance = 0;
             if (m_bReady) m_Renderer.DestroyView(m_RenderView);
-            xeditor::DestroyGpu(m_pDevice, m_ShadowInstance, m_ShadowPipeline);
+            xeditor::DestroyGpu(m_pDevice, m_ShadowInstance, m_ShadowPipeline, m_WireInstance, m_WirePipeline, m_NormalInstance, m_NormalPipeline);
             scene::Release();
         }
 
@@ -196,7 +301,7 @@ namespace xgeom_skin_editor::preview
                         auto* pTexture = xresource::g_Mgr.getResource(E.m_TexureRef);
                         Textures.push_back(pTexture ? pTexture : &m_White);
                     }
-                    if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures))) continue;
+                    if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, pMat->m_Flags.m_bAlpha))) continue;
                 }
 
                 const auto Textures = std::array<xgpu::texture*, 2>{ &m_ShadowMap, &m_White };
@@ -285,7 +390,89 @@ namespace xgeom_skin_editor::preview
             Scene.m_Sun     = { .m_Direction = m_Center - m_LightView.getPosition(), .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
-            m_Renderer.Render(Window, Scene, m_RenderView, m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawGrid(CmdBuffer); });
+            // The environment cubemap lights instead of the flat fill (a texture that is not a cubemap: the flat fill)
+            if (Settings.m_Environment.m_Instance.m_Value != m_EnvInstance)
+            {
+                xresource::g_Mgr.ReleaseRef(m_EnvRef);
+                m_EnvRef      = Settings.m_Environment;
+                m_EnvInstance = Settings.m_Environment.m_Instance.m_Value;
+            }
+            if (const xgpu::texture* pEnv = m_EnvRef.empty() ? nullptr : xresource::g_Mgr.getResource(m_EnvRef); pEnv && pEnv->isCubemap())
+                Scene.m_Sky = { .m_Intensity = 1, .m_pCubemap = pEnv };
+
+            m_Renderer.Render(Window, Scene, m_RenderView, m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom, Settings); });
+        }
+
+        // The submeshes of the previewed LOD, each with its push constants (cluster index, bone influences): SetUBO runs per submesh
+        template<typename T_FN>
+        static void ForEachCluster(geom& Geom, const render_settings& Settings, xgpu::cmd_buffer& CmdBuffer, T_FN&& SetUBO) noexcept
+        {
+            const std::uint32_t MaxInfluences = static_cast<std::uint32_t>(std::clamp(Settings.m_MaxInfluences, 1, 4));
+            for (auto& M : Geom.getMeshes())
+            {
+                if (M.m_nLODs == 0) continue;
+                auto& L = Geom.getLODs()[M.m_iLOD + std::clamp(Settings.m_iLOD, 0, int(M.m_nLODs) - 1)];
+                for (auto& S : Geom.getSubmeshes().subspan(L.m_iSubmesh, L.m_nSubmesh))
+                {
+                    SetUBO();
+                    geom_skin_push_const PushConst{ .m_ClusterIndex = S.m_iCluster, .m_MaxInfluences = MaxInfluences };
+                    for (auto& C : Geom.getClusters().subspan(S.m_iCluster, S.m_nCluster))
+                    {
+                        CmdBuffer.setPushConstants(PushConst);
+                        CmdBuffer.Draw(C.m_nIndices, C.m_iIndex, C.m_iVertex);
+                        PushConst.m_ClusterIndex++;
+                    }
+                }
+            }
+        }
+
+        // The wire frame, the grid and the tangent / binormal / normal lines, in display colors over the tone-mapped image
+        void DrawOverlays(xgpu::cmd_buffer& CmdBuffer, geom& Geom, const render_settings& Settings) noexcept
+        {
+            if (!m_bReady) return;
+
+            // Everything is drawn relative to the camera
+            const auto L2w = xmath::fmat4::fromTranslation(-m_View.getPosition());
+            const auto w2C = m_View.getW2C() * xmath::fmat4::fromTranslation(m_View.getPosition());
+            std::array  StaticSSBO{ &Geom.ClusterBuffer(), &m_BoneMatrices };
+
+            if (Geom.m_nVertices && Settings.m_bWireFrame)
+            {
+                CmdBuffer.setPipelineInstance(m_WireInstance, StaticSSBO);
+                CmdBuffer.setStreamingBuffers({ &Geom.IndexBuffer(), 2 });      // the index buffer and stream 0
+                ForEachCluster(Geom, Settings, CmdBuffer, [&]
+                {
+                    auto& UBO = m_WireUBO.allocEntry<ubo_wireframe_mesh>();
+                    UBO.m_L2w = L2w;
+                    UBO.m_w2C = w2C;
+                    CmdBuffer.setDynamicUBO(m_WireUBO, 0);
+                });
+            }
+
+            // The grid sits at the bottom of the geometry
+            xeditor_tools::grid::Draw(CmdBuffer, m_View.getW2C(), m_View.getPosition(), m_ShadowL2C, Settings.m_bGridToYMin ? Geom.m_BBox.m_Min.m_Y : 0.0f);
+
+            if (Geom.m_nVertices)
+            {
+                static constexpr auto Colors = std::array{ xmath::fvec4{1,0,0,1}, xmath::fvec4{0,1,0,1}, xmath::fvec4{0,0,1,1} };
+                static constexpr auto Axis   = std::array{ xmath::fvec4{1,0,0,0}, xmath::fvec4{0,1,0,1}, xmath::fvec4{0,0,1,1} };
+                const auto List = std::array{ Settings.m_bTangents, Settings.m_bBinormals, Settings.m_bNormals };
+                for (std::size_t i = 0; i < List.size(); ++i)
+                {
+                    if (!List[i]) continue;
+                    CmdBuffer.setPipelineInstance(m_NormalInstance, StaticSSBO);
+                    CmdBuffer.setStreamingBuffers({ &Geom.IndexBuffer(), 3 });  // the index buffer, stream 0 and stream 1
+                    ForEachCluster(Geom, Settings, CmdBuffer, [&]
+                    {
+                        auto& UBO = m_NormalUBO.allocEntry<ubo_debug_normal_mesh>();
+                        UBO.m_L2C         = w2C * L2w;
+                        UBO.m_ScaleFactor = Axis[i];
+                        UBO.m_ScaleFactor.m_W = Geom.m_BBox.getRadius();
+                        UBO.m_Color       = Colors[i];
+                        CmdBuffer.setDynamicUBO(m_NormalUBO, 0);
+                    });
+                }
+            }
         }
     };
 }
