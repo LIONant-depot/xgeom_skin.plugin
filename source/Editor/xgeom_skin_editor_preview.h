@@ -276,6 +276,13 @@ namespace xgeom_skin_editor::preview
         // The renderer's material of every material slot of the geometry (after each (re)load of the compiled resource): the material's HDR
         // shader with the shadow map in slot 0 and the material instance's textures after it (white where one does not resolve); the
         // renderer's default material (white diffuse) when the slot has no material. The mesh itself is made by Render (it depends on the LOD).
+        // Something the renderer's materials were made from compiled again (xresource::mgr::MarkUpdated): Render makes them again
+        bool MaterialsStale() const noexcept
+        {
+            for (const auto& R : m_MatRefs) if (xmaterial_instance::rt::isStale(R)) return true;
+            return false;
+        }
+
         void RebuildMaterials(geom& Geom) noexcept
         {
             ReleaseMaterials();
@@ -368,6 +375,7 @@ namespace xgeom_skin_editor::preview
         void Render(xgpu::window& Window, geom& Geom, const render_settings& Settings, float ViewW, float ViewH) noexcept
         {
             if (!m_bReady || ViewW <= 1.f || ViewH <= 1.f) return;
+            if (MaterialsStale()) RebuildMaterials(Geom);       // a material compiled again
 
             const int W = static_cast<int>(ViewW), H = static_cast<int>(ViewH);
             if (m_RenderView.m_Width != W || m_RenderView.m_Height != H)
