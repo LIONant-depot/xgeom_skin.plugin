@@ -151,7 +151,7 @@ namespace xgeom_skin_editor::preview
         int                                     m_MeshLOD            = -1;
         int                                     m_MeshMaxInfluences  = -1;
         std::vector<xlionrender::material_id>   m_Materials;            // one per material slot of the geometry
-        std::vector<xrsc::material_instance_ref> m_MatRefs;             // held while m_Materials uses their shaders and textures
+        std::vector<xmaterial_instance::held>    m_MatRefs;             // what m_Materials were made of, held (their GPU objects point at it)
         xrsc::texture_ref                       m_EnvRef{};             // the environment cubemap (render_settings::m_Environment), held while lit by it
         std::uint64_t                           m_EnvInstance        = 0;
 
@@ -256,7 +256,7 @@ namespace xgeom_skin_editor::preview
         void ReleaseMaterials() noexcept
         {
             for (auto& E : m_Materials) m_Renderer.DestroyMaterial(E);
-            for (auto& E : m_MatRefs) xresource::g_Mgr.ReleaseRef(E);
+            for (auto& E : m_MatRefs) E.Release();
             m_Materials.clear();
             m_MatRefs.clear();
             m_Renderer.DestroyMesh(m_Mesh);
@@ -279,7 +279,7 @@ namespace xgeom_skin_editor::preview
         // Something the renderer's materials were made from compiled again (xresource::mgr::MarkUpdated): Render makes them again
         bool MaterialsStale() const noexcept
         {
-            for (const auto& R : m_MatRefs) if (xmaterial_instance::rt::isStale(R)) return true;
+            for (const auto& H : m_MatRefs) if (H.isStale()) return true;
             return false;
         }
 
@@ -293,10 +293,9 @@ namespace xgeom_skin_editor::preview
             for (auto& MI : Materials)
             {
                 const auto Index = static_cast<int>(&MI - Materials.data());
-                xresource::g_Mgr.CloneRef(m_MatRefs[Index], MI);
-
-                xmaterial_instance::rt* pMI  = MI.empty() ? nullptr : xresource::g_Mgr.getResource(m_MatRefs[Index]);
-                xmaterial::rt*          pMat = (pMI && !pMI->m_MaterialRef.empty()) ? xresource::g_Mgr.getResource(pMI->m_MaterialRef) : nullptr;
+                auto& Held = m_MatRefs[Index];
+                xmaterial_instance::rt* pMI  = MI.empty() ? nullptr : Held.Take(MI);
+                xmaterial::rt*          pMat = (pMI && !Held.m_Material.empty()) ? xresource::g_Mgr.getResource(Held.m_Material) : nullptr;
 
                 if (pMI && pMat && pMI->m_nTexturesList > 0)
                 {
@@ -305,7 +304,7 @@ namespace xgeom_skin_editor::preview
                     for (auto& E : pMI->getTextures())
                     {
                         if (&E == pMI->getTextures().data()) { Textures.push_back(&m_ShadowMap); continue; }
-                        auto* pTexture = xresource::g_Mgr.getResource(E.m_TexureRef);
+                        auto* pTexture = xresource::g_Mgr.getResource(Held.m_Textures[&E - pMI->getTextures().data()]);
                         Textures.push_back(pTexture ? pTexture : &m_White);
                     }
                     if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, pMat->m_Flags.m_bAlpha))) continue;
