@@ -200,7 +200,6 @@ namespace xgeom_skin_editor
         bool                                                m_bHasGeom = false;         // the compiled geometry and its skeleton are loaded and drawable
         std::string                                         m_ErrorMessage;             // why nothing is drawn, when so
         std::vector<xmath::fmat4>                           m_PoseWorlds;
-        std::function<void(xproperty::inspector&, const xproperty::type::object&, void*, std::string_view, const xproperty::any&, ImGuiTreeNodeFlags, const char*, bool&)> m_SkeletonRowLabel;
         std::uint64_t                                       m_LoadedSkeleton = 0;       // the skeleton the descriptor named when the geometry was loaded
 
         // The preview animation: tracked apart from the setting, which is never resolved (resolving turns a reference into a pointer), so a change can be seen
@@ -238,7 +237,6 @@ namespace xgeom_skin_editor
             xresource_editor::WireResourcePickerCallbacks(m_DescriptorInspector.m_Inspector);
             xresource_editor::WireResourcePickerCallbacks(m_SettingsInspector.m_Inspector);
             m_Import.RegisterRowLabels(m_DescriptorInspector.m_Inspector);       // the material slots: names, override arrows, Duplicate as override
-            RegisterSkeletonRowLabel();                                          // and the SkeletonRef's override arrow
             m_SettingsInspector.BindObject(*xproperty::getObjectByType<preview::render_settings>(), &m_Settings);
 
             AddPanel("Rendering Settings", dock::left,   [this] { m_SettingsInspector.Show(); });
@@ -258,43 +256,18 @@ namespace xgeom_skin_editor
             m_Preview.Release();
         }
 
-        // The SkeletonRef row, with the skeleton imported: the arrow that dismisses an override (like a material slot's). Every other row is the
-        // material import's (the inspector has one label delegate).
-        void RegisterSkeletonRowLabel() noexcept
-        {
-            m_SkeletonRowLabel = [this](xproperty::inspector& Inspector, const xproperty::type::object& Object, void* pObject, std::string_view Path, const xproperty::any& Value, ImGuiTreeNodeFlags Flags, const char* pName, bool& Open)
-            {
-                auto* pDesc = Desc();
-                if (!pDesc || !pDesc->m_ImportAnimation.m_bSkeleton || !Path.ends_with("/SkeletonRef"))
-                    return m_Import.m_RowLabel(Inspector, Object, pObject, Path, Value, Flags, pName, Open);
+        // What the preview plays: the PreviewAnimRef; with the skin importing its animations it is the skin's AnimationRef (read-only)
+        xrsc::anim_package PreviewAnim() noexcept { return m_Settings.m_PreviewAnimRef; }
 
-                const auto Imported  = xgeom_skin::ImportedSkeleton(m_Document.m_Guid.m_Instance);
-                const bool bOverride = !pDesc->m_SkeletonRef.empty() && pDesc->m_SkeletonRef.m_Instance != Imported;
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, xproperty::inspector::ResourceRowFramePadding(Inspector.m_CurrentProperty.m_Flags.m_bSmallResource));
-                if (bOverride)
-                {
-                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(170, 170, 255, 255));
-                    if (ImGui::Button(">"))
-                        xeditor::Run(m_Undo, std::format("SetProperty -Path {} -Value {}", xeditor::Quote(std::string(Path))
-                            , xeditor::Quote(std::format("{:X}, {:X}", Imported.m_Value, xrsc::skeleton_type_guid_v.m_Value))));
-                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Overridden: click to use the imported skeleton again");
-                    ImGui::SameLine();
-                }
-                Open = ImGui::TreeNodeEx(reinterpret_cast<const void*>(std::hash<std::string_view>{}(Path)), ImGuiTreeNodeFlags_Framed | Flags, "  %s", pName);
-                ImGui::PopStyleVar();
-                if (bOverride) ImGui::PopStyleColor();
-            };
-            m_DescriptorInspector.m_Inspector.m_OnResourceLeftSize.m_Delegates.clear();
-            m_DescriptorInspector.m_Inspector.m_OnResourceLeftSize.Register(m_SkeletonRowLabel);
-        }
-
-        // What the preview plays: the PreviewAnimRef, or else the imported animations
-        xrsc::anim_package PreviewAnim() noexcept
+        // The imported skeleton and animations are the descriptor's SkeletonRef and AnimationRef (read-only): they follow the flag and the model's clips
+        // as soon as either changes, without an undo step of their own (an undo of the flag brings its own snapshot back)
+        void SyncImported() noexcept
         {
-            if (!m_Settings.m_PreviewAnimRef.empty()) return m_Settings.m_PreviewAnimRef;
             auto* pDesc = Desc();
-            if (!pDesc || !pDesc->m_ImportAnimation.m_bAnimations) return {};
-            return { .m_Instance = xgeom_skin::ImportedAnimations(m_Document.m_Guid.m_Instance) };
+            if (!pDesc) return;
+            if (pDesc->SyncImportedAnimation(m_Document.m_Guid.m_Instance, m_Details.m_bHasAnimations)) m_Document.m_bDirty = true;
+            m_Settings.m_bAnimFromSkin = pDesc->m_bImportSkeletonAndAnimation;
+            if (m_Settings.m_bAnimFromSkin) m_Settings.m_PreviewAnimRef = pDesc->m_AnimationRef;
         }
 
         desc* Desc() noexcept { return m_Document.isLoaded() ? static_cast<desc*>(m_Document.m_pDescriptor.get()) : nullptr; }
@@ -405,6 +378,7 @@ namespace xgeom_skin_editor
         // Once a frame, whichever tab is showing: a changed preview animation is picked up, and the time advances while playing
         void Render() noexcept override
         {
+            SyncImported();
             if (const auto Anim = PreviewAnim(); Anim.m_Instance.m_Value != m_LastAnimInstance)
             {
                 xresource::g_Mgr.ReleaseRef(m_AnimRef);

@@ -60,9 +60,14 @@ override. An override has the arrow beside it (it gives the slot back the import
 
 ## Imported skeleton and animations
 
-For a simple animated object, without making a Skeleton and an Anim Package by hand. `ImportAnimation/bSkeleton` on: every compile makes a
-virtual Skeleton of the model, and the skin binds its bones with the bone manifest it builds itself from the same import
-(`xskeleton.plugin/source/compiler/xskeleton_merge.h`, the Skeleton compiler's own code), since that skeleton compiles after the skin. An
-empty `SkeletonRef` (or the generated one) is the imported skeleton; any other skeleton is an override, with the arrow that gives it back.
-`ImportAnimation/bAnimations` on: a virtual Anim Package with every clip of the model, on the skin's skeleton; the preview plays it when no
-`PreviewAnimRef` is set. New skins import both; the skins made before keep them off. Test: `smoke/test_imported_skeleton.py`.
+For a simple animated object, without making a Skeleton and an Anim Package by hand. `ImportSkeletonAndAnimation` (right after `ImportAsset`; on for a new
+skin) on: every compile makes a virtual Skeleton of the model, and the skin binds its bones with the bone manifest it builds itself from the same import
+(`xskeleton.plugin/source/compiler/xskeleton_merge.h`, the Skeleton compiler's own code), since that skeleton compiles after the skin; and a virtual Anim
+Package with every clip of the model, on that skeleton. The `SkeletonRef` is then the generated skeleton and the new `AnimationRef` the generated package
+(empty, with a warning in the compile log, when the model has no clips), both read-only; the compiled skin carries both guids (GeomSkin format v3). The
+preview plays the `AnimationRef` (its `PreviewAnimRef` row is read-only and shows it). Off: the `SkeletonRef` is yours to set (required), the `AnimationRef`
+is hidden and nothing is generated.
+
+The generated Skeleton and Anim Package are ordinary resources of the skin (children of it in the asset browser): edit the clips (Loop, ...) or the
+bones on them. A compile updates only what the skin owns (the skeleton's import file, the package's skeleton and file) and keeps the rest; ones the
+model no longer makes stay until `RemoveUnusedImportedResources`. The two example skins keep it off. Test: `smoke/test_imported_skeleton.py`.

@@ -94,7 +94,7 @@ namespace xgeom_skin_compiler
             Settings.m_pGeom = &m_RawGeom;
             Settings.m_pNode = &m_RootNode;
             if (m_bImportedSkeleton)                            Settings.m_pSkeleton = &m_RawSkeleton;
-            if (m_Descriptor.m_ImportAnimation.m_bAnimations)   Settings.m_pAnims    = &m_RawAnims;   // only to know whether the model has clips
+            if (m_bImportedSkeleton)                            Settings.m_pAnims    = &m_RawAnims;   // only to know whether the model has clips
 
             if ( auto Err = Importer.Import(Path, Settings); Err )
                 return xerr::create_f<state, "Failed to import the asset">(Err);
@@ -900,6 +900,8 @@ xerr ConvertToCompilerMesh(void)
             result.m_nVertices    = static_cast<std::uint32_t>(OutAllStaticVerts.size());
             result.m_nIndices     = static_cast<std::uint32_t>(OutAllIndices.size());
             result.m_SkeletonRef  = m_Descriptor.m_SkeletonRef;    // required by Validate() - always set by the time compilation gets here
+            result.m_AnimationRef = m_Descriptor.m_AnimationRef;   // the generated Anim Package: empty when the skin does not import them or the model has none
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("SkeletonRef {:X} AnimationRef {:X}", result.m_SkeletonRef.m_Instance.m_Value, result.m_AnimationRef.m_Instance.m_Value));
 
             //
             // Set all the material instances
@@ -1378,7 +1380,7 @@ xerr ConvertToCompilerMesh(void)
             displayProgressBar("Loading Descriptor", 1);
 
             // The imported skeleton: this compile makes it (see the end), so its bone manifest is built here from the same import
-            m_bImportedSkeleton = m_Descriptor.isImportedSkeleton(m_ResourceGuid);
+            m_bImportedSkeleton = m_Descriptor.m_bImportSkeletonAndAnimation;
             if (m_bImportedSkeleton) m_Descriptor.m_SkeletonRef.m_Instance = xgeom_skin::ImportedSkeleton(m_ResourceGuid);
 
             //
@@ -1407,10 +1409,19 @@ xerr ConvertToCompilerMesh(void)
             }
             BuildBoneNameMap();
 
+            // The AnimationRef is the generated Anim Package when the model has clips; with none there is nothing to play: a warning, not a failure
+            m_Descriptor.m_AnimationRef = {};
+            if (m_bImportedSkeleton)
+            {
+                if (m_RawAnims.empty()) LogMessage(xresource_pipeline::msg_type::WARNING, "Import Skeleton and Animation: the model has no animations, the AnimationRef is empty");
+                else                    m_Descriptor.m_AnimationRef.m_Instance = xgeom_skin::ImportedAnimations(m_ResourceGuid);
+            }
+
             //
             // Fill the detail structure
             //
             ComputeDetailStructure();
+            m_Details.m_bHasAnimations = m_bImportedSkeleton && !m_RawAnims.empty();
 
             //
             // The materials of the model, as virtual Material Instances and Textures
@@ -1455,13 +1466,9 @@ xerr ConvertToCompilerMesh(void)
                     , [](xskeleton_desc::descriptor& Existing, const xskeleton_desc::descriptor& Fresh) { Existing.m_ImportAsset = Fresh.m_ImportAsset; });      // the bones, the masks, the pre-transform: the user's
             }
 
-            if (m_Descriptor.m_ImportAnimation.m_bAnimations)
+            if (m_bImportedSkeleton)
             {
-                if (m_RawAnims.empty())
-                {
-                    LogMessage(xresource_pipeline::msg_type::WARNING, "Import Animations: the model has no animations");
-                }
-                else
+                if (!m_RawAnims.empty())
                 {
                     xanim_package_desc::descriptor Package;
                     Package.m_SkeletonRef = m_Descriptor.m_SkeletonRef;

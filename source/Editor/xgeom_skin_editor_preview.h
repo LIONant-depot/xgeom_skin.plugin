@@ -93,6 +93,7 @@ namespace xgeom_skin_editor::preview
     struct render_settings
     {
         xrsc::anim_package  m_PreviewAnimRef = {};
+        bool                m_bAnimFromSkin  = false;       // the skin imports its animations: the preview plays its AnimationRef (read-only), set by the editor
         int                 m_iLOD           = 0;
         int                 m_MaxInfluences  = 4;
         pose_type           m_PoseType       = pose_type::ANIMATION_POSE;
@@ -106,7 +107,14 @@ namespace xgeom_skin_editor::preview
 
         XPROPERTY_DEF
         ( "RenderSettings", render_settings
-        , obj_member<"PreviewAnimRef", &render_settings::m_PreviewAnimRef >
+        , obj_member<"PreviewAnimRef", &render_settings::m_PreviewAnimRef, member_dynamic_flags < +[](const render_settings& O)
+        {
+            xproperty::flags::type Flags = {};
+            Flags.m_bShowReadOnly = O.m_bAnimFromSkin;
+            return Flags;
+        }
+        >>
+        , obj_member<"AnimFromSkin",   &render_settings::m_bAnimFromSkin, member_flags<flags::DONT_SHOW, flags::DONT_SAVE> >
         , obj_member<"LOD",            &render_settings::m_iLOD >
         , obj_member<"MaxInfluences",  &render_settings::m_MaxInfluences >
         , obj_member<"Pose Type",      &render_settings::m_PoseType, member_enum_span<pose_type_v> >

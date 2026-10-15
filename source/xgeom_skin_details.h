@@ -143,6 +143,7 @@ namespace xgeom_skin
         std::vector<std::string>    m_MaterialList;
         int                         m_NumFaces;
         node                        m_RootNode;
+        bool                        m_bHasAnimations = false;       // the model has animation clips (the descriptor's AnimationRef follows it)
 
         XPROPERTY_DEF
         ( "details", details
@@ -150,6 +151,7 @@ namespace xgeom_skin
         , obj_member<"MeshList",            &details::m_MeshList,       member_flags<flags::SHOW_READONLY> >
         , obj_member<"NumFaces",            &details::m_NumFaces,       member_flags<flags::SHOW_READONLY> >
         , obj_member<"MaterialList",        &details::m_MaterialList,   member_flags<flags::SHOW_READONLY> >
+        , obj_member<"HasAnimations",       &details::m_bHasAnimations, member_flags<flags::SHOW_READONLY> >
         )
     };
     XPROPERTY_REG(details)

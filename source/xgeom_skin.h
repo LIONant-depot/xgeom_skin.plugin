@@ -5,6 +5,7 @@
 #include "dependencies/xmath/source/xmath_fshapes.h"
 #include "dependencies/xserializer/source/xserializer.h"
 #include "plugins/xskeleton.plugin/source/xskeleton_xgpu_rsc_loader.h"
+#include "plugins/xanim_package.plugin/source/xanim_package_xgpu_rsc_loader.h"
 #include <span>  // Add for std::span
 #include <algorithm>
 
@@ -18,7 +19,8 @@ namespace xgeom_skin
         // descriptor always had one (m_SkeletonRef, required - Validate() errors if empty); this just
         // carries it through to the compiled side the same way m_pDefaultMaterialInstances already
         // does for material refs.
-        inline static constexpr auto xserializer_version_v = 2;
+        // v3: added m_AnimationRef - the Anim Package of the skin's own animations (empty when the model has none or the skin does not import them)
+        inline static constexpr auto xserializer_version_v = 3;
         struct mesh
         {
             std::array<char, 32>    m_Name;
@@ -196,6 +198,7 @@ namespace xgeom_skin
         inline std::span<cluster_data>                  getClusterData              (void)                              const   noexcept { return { reinterpret_cast<cluster_data*> (m_pData + m_ClusterDataOffset),    m_nClusters }; }
         inline std::span<xrsc::material_instance_ref>   getDefaultMaterialInstances (void)                              const   noexcept { return { m_pDefaultMaterialInstances, m_nDefaultMaterialInstances }; }
         inline xrsc::skeleton                           getSkeletonRef              (void)                              const   noexcept { return m_SkeletonRef; }
+        inline xrsc::anim_package                       getAnimationRef             (void)                              const   noexcept { return m_AnimationRef; }
 
         xmath::fbbox                    m_BBox;
         char*                           m_pData;  // Contiguous buffer for GPU data ( vertices, extras, indices)
@@ -205,6 +208,7 @@ namespace xgeom_skin
         cluster*                        m_pCluster;
         xrsc::material_instance_ref*    m_pDefaultMaterialInstances;
         xrsc::skeleton                  m_SkeletonRef;   // the skeleton this geometry is skinned to - always set (descriptor requires one)
+        xrsc::anim_package              m_AnimationRef;  // its generated animations: empty when the skin does not import them or the model has none
         runtime_allocation              m_RunTimeSpace;
         std::size_t                     m_DataSize;
         std::size_t                     m_VertexOffset;
@@ -345,6 +349,15 @@ namespace xserializer::io_functions
     }
     #endif
 
+    #ifndef XGEOM_ANIM_PACKAGE_REF_SERIALIZEIO
+    #define XGEOM_ANIM_PACKAGE_REF_SERIALIZEIO
+    template<> inline
+    xerr SerializeIO<xrsc::anim_package>(xserializer::stream& Stream, const xrsc::anim_package& AR) noexcept
+    {
+        return Stream.Serialize(AR.m_Instance.m_Value);
+    }
+    #endif
+
     // Same "one definition for every host" guard as material_instance_ref above - xgeom_static also
     // links against a skeleton_ref-less past, so this only ever needs defining once regardless of how
     // many geometry loaders end up including this header in the same translation unit.
@@ -374,6 +387,7 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_nDefaultMaterialInstances))
             || (Err = Stream.Serialize(Geom.m_pDefaultMaterialInstances,    Geom.m_nDefaultMaterialInstances))
             || (Err = Stream.Serialize(Geom.m_SkeletonRef))
+            || (Err = Stream.Serialize(Geom.m_AnimationRef))
             || (Err = Stream.Serialize(Geom.m_DataSize))
             || (Err = Stream.Serialize(Geom.m_pData,                        Geom.m_DataSize))
             || (Err = Stream.Serialize(Geom.m_RunTimeSpace))

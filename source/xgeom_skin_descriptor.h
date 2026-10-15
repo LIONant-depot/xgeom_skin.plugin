@@ -5,6 +5,7 @@
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
 #include "plugins/xskeleton.plugin/source/xskeleton_xgpu_rsc_loader.h"
+#include "plugins/xanim_package.plugin/source/xanim_package_xgpu_rsc_loader.h"
 #include "plugins/xskeleton.plugin/source/xskeleton_bone_manifest.h"
 #include "xgeom_skin_details.h"
 
@@ -159,22 +160,9 @@ namespace xgeom_skin
     //------------------------------------------------------------------------------------------------
     // DESCRIPTOR
     //------------------------------------------------------------------------------------------------
-    // The skeleton and the animations of the model, as virtual resources the skin compiler makes (like the imported materials): for a simple
-    // animated object, without making a Skeleton and an Anim Package by hand. The SkeletonRef empty (or the generated one) means the imported
-    // skeleton; any other skeleton is an override.
-    struct import_animation
-    {
-        bool    m_bSkeleton     = true;
-        bool    m_bAnimations   = true;
-
-        XPROPERTY_DEF
-        ( "import_animation", import_animation
-        , obj_member<"bSkeleton",   &import_animation::m_bSkeleton,   member_help<"Import the skeleton of the model: the compiler makes a Skeleton for this skin. The SkeletonRef can still take your own skeleton: it is then an override (the arrow beside it dismisses it)">>
-        , obj_member<"bAnimations", &import_animation::m_bAnimations, member_help<"Import the animations of the model: the compiler makes an Anim Package with all its clips, on the skin's skeleton (the preview plays it when no PreviewAnimRef is set)">>
-        )
-    };
-    XPROPERTY_REG(import_animation)
-
+    // The skeleton and the animations of the model are virtual resources the skin compiler makes (like the imported materials), for a simple animated
+    // object without making a Skeleton and an Anim Package by hand: with ImportSkeletonAndAnimation on, the SkeletonRef and the AnimationRef are those
+    // two, read-only. The clips are edited on the generated Anim Package itself (it is an ordinary resource of the owner).
     inline xresource::instance_guid ImportedSkeleton(xresource::instance_guid Owner) noexcept
     {
         return xresource::instance_guid::GenerateGUIDCopy(std::format("{:016X}_skeleton", Owner.m_Value).c_str());
@@ -199,7 +187,7 @@ namespace xgeom_skin
             // A skin mesh without a skeleton is meaningless - required, just like xanim_package's own
             // skeleton reference.
             //
-            if (m_SkeletonRef.empty() && !m_ImportAnimation.m_bSkeleton)
+            if (m_SkeletonRef.empty() && !m_bImportSkeletonAndAnimation)
             {
                 Errors.push_back(std::format("The skeleton reference is NULL"));
             }
@@ -574,7 +562,7 @@ namespace xgeom_skin
             if (m_SkeletonRef.empty()) return {};
 
             // The imported skeleton is made by the skin compiler itself (it compiles after the skin): nothing to read
-            if (isImportedSkeleton(OwnerFromPath(FileName))) return {};
+            if (m_bImportSkeletonAndAnimation) return {};
 
             // Cross-plugin dependency: read the Skeleton compiler's own bone-manifest export (its
             // final, post-merge bone order/hashes) - not its compiled binary. RunAfter in this
@@ -602,18 +590,16 @@ namespace xgeom_skin
             return { static_cast<std::uint64_t>(std::wcstoull(Stem.c_str(), nullptr, 16)) };
         }
 
-        bool isImportedSkeleton(xresource::instance_guid Owner) const noexcept
+        // With the import on the SkeletonRef is the generated skeleton and the AnimationRef the generated package (empty when the model has no clips);
+        // with it off the AnimationRef is empty and the generated skeleton is let go (the user picks one). Returns whether something changed.
+        bool SyncImportedAnimation(xresource::instance_guid Owner, bool bHasAnimations) noexcept
         {
-            return m_ImportAnimation.m_bSkeleton && (m_SkeletonRef.empty() || m_SkeletonRef.m_Instance == ImportedSkeleton(Owner));
-        }
-
-        // Like SyncMaterialSlots: with the import on an empty SkeletonRef shows the imported skeleton, with it off the imported one is emptied
-        bool SyncSkeletonSlot(xresource::instance_guid Owner) noexcept
-        {
-            const auto Imported = ImportedSkeleton(Owner);
-            if ( m_ImportAnimation.m_bSkeleton && m_SkeletonRef.empty())                 { m_SkeletonRef.m_Instance = Imported; return true; }
-            if (!m_ImportAnimation.m_bSkeleton && m_SkeletonRef.m_Instance == Imported)  { m_SkeletonRef = {};                  return true; }
-            return false;
+            const auto Skeleton  = m_bImportSkeletonAndAnimation ? ImportedSkeleton(Owner) : (m_SkeletonRef.m_Instance == ImportedSkeleton(Owner) ? xresource::instance_guid{} : m_SkeletonRef.m_Instance);
+            const auto Animation = m_bImportSkeletonAndAnimation && bHasAnimations ? ImportedAnimations(Owner) : xresource::instance_guid{};
+            const bool bChanged  = m_SkeletonRef.m_Instance != Skeleton || m_AnimationRef.m_Instance != Animation;
+            m_SkeletonRef.m_Instance  = Skeleton;
+            m_AnimationRef.m_Instance = Animation;
+            return bChanged;
         }
 
         inline std::vector<std::string> MergeWithDetails(xgeom_skin::details& Details, xresource::instance_guid Owner);
@@ -635,16 +621,31 @@ namespace xgeom_skin
         std::vector<ungroup_mesh>                   m_UngroupMeshList       = {};
         std::vector<merge_group>                    m_MergeGroupList        = {};
         std::vector<delete_entry>                   m_DeleteEntryList       = {};
+        bool                                         m_bImportSkeletonAndAnimation = true;   // the skeleton and the animations of the model are generated (read-only SkeletonRef and AnimationRef)
         xrsc::skeleton                               m_SkeletonRef           = {};   // required - Validate() errors if empty
+        xrsc::anim_package                           m_AnimationRef          = {};   // the generated Anim Package: only with the import on, empty when the model has no clips
         xmaterial_instance::import::settings         m_ImportMaterials       = {};
-        import_animation                             m_ImportAnimation       = {};
         xskeleton_desc::bone_manifest                m_ResolvedSkeletonBones = {};   // NOT saved - populated in Serialize() above
 
         XPROPERTY_VDEF
         ( "GeomSkin", descriptor
             , obj_member<"ImportAsset",         &descriptor::m_ImportAsset, member_ui<std::wstring>::file_dialog<mesh_filter_v, true, 1> >
-            , obj_member<"SkeletonRef",         &descriptor::m_SkeletonRef >
-            , obj_member<"ImportAnimation",     &descriptor::m_ImportAnimation, member_ui_open<true>, member_help<"Import the skeleton and the animations of the model (generated, virtual resources) instead of making a Skeleton and an Anim Package by hand">>
+            , obj_member<"ImportSkeletonAndAnimation", &descriptor::m_bImportSkeletonAndAnimation, member_help<"Import the skeleton and the animations of the model: the compiler makes a Skeleton and an Anim Package (virtual resources, edit them like any resource) and the SkeletonRef and the AnimationRef are those. Off: you choose the skeleton yourself">>
+            , obj_member<"SkeletonRef",         &descriptor::m_SkeletonRef, member_dynamic_flags < +[](const descriptor& O)
+            {
+                xproperty::flags::type Flags = {};
+                Flags.m_bShowReadOnly = O.m_bImportSkeletonAndAnimation;
+                return Flags;
+            }
+            >>
+            , obj_member<"AnimationRef",        &descriptor::m_AnimationRef, member_help<"The Anim Package the compiler made from the clips of the model. Edit the clips (Loop, ...) on that resource">, member_dynamic_flags < +[](const descriptor& O)
+            {
+                xproperty::flags::type Flags = {};
+                Flags.m_bDontShow     = !O.m_bImportSkeletonAndAnimation;
+                Flags.m_bShowReadOnly = true;
+                return Flags;
+            }
+            >>
             , obj_member<"PreTranslation",      &descriptor::m_PreTranslation >
             , obj_member<"bMergeAllMeshes",     &descriptor::m_bMergeAllMeshes >
             , obj_member<"AllMeshesDetails",    &descriptor::m_AllMeshesDetails, member_ui_open<true>, member_dynamic_flags < +[](const descriptor& O)
@@ -907,7 +908,7 @@ namespace xgeom_skin
 
         // The imported instances go in the slots nobody has assigned
         SyncMaterialSlots(Owner);
-        SyncSkeletonSlot(Owner);
+        SyncImportedAnimation(Owner, Details.m_bHasAnimations);
 
         return Messages;
     }
