@@ -10,6 +10,7 @@
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
 #include "plugins/xgeom_skin.plugin/source/Editor/xgeom_skin_editor_preview.h"
+#include "plugins/xmaterial_instance.plugin/source/Editor/xmaterial_instance_import_editor.h"
 #include "plugins/xgeom_skin.plugin/source/Editor/xgeom_skin_thumbnail.h"
 #include "plugins/xgeom_skin.plugin/source/xgeom_skin_xgpu_rsc_loader.cpp"      // the resource loader: compiled once, in the host's translation unit
 #include "source/Tools/xgpu_imgui_timeline.h"
@@ -184,6 +185,7 @@ namespace xgeom_skin_editor
         xgeom_skin::details                                 m_Details;                  // the scene nodes, from the compiler's log (empty until the first compile)
         node_cmd                                            m_AddToNewGroup, m_AddToGroup, m_RemoveFromGroup, m_DeleteNode, m_UndeleteNode;
         list_nodes_cmd                                      m_ListNodes;
+        xmaterial_instance::import::editor::session_part    m_Import;      // SetImportMaterials, DuplicateImportedMaterial, the slots' override arrows
         xeditor::set_preview_cmd<preview::render_settings>  m_SetPreview;
         xeditor::list_preview_cmd<preview::render_settings> m_ListPreview;
         playback_cmd                                        m_SelectClip, m_Play, m_Pause, m_Seek, m_SetSpeed, m_Info;
@@ -218,6 +220,7 @@ namespace xgeom_skin_editor
             , m_DeleteNode      (m_Undo, m_Document, m_Details, "DeleteNode",         "Leaves a node (and its children) out of the compiled geometry (undoable). Usage: DeleteNode -Node text", &DeleteNode, false)
             , m_UndeleteNode    (m_Undo, m_Document, m_Details, "UndeleteNode",       "Puts a deleted node back (undoable). Usage: UndeleteNode -Node text",                         &UndeleteNode,    false)
             , m_ListNodes(m_Undo, m_Document, m_Details)
+            , m_Import(m_Undo, m_Document, &GetImportSlots)
             , m_SetPreview(m_Undo, m_Settings), m_ListPreview(m_Undo, m_Settings)
             , m_CameraCmds(m_Undo, m_Preview.Camera())
             , m_SelectClip(m_Undo, *this, playback_cmd::kind::select_clip, "SelectClip",   "Selects a clip of the preview animation. Usage: SelectClip -Clip index")
@@ -233,7 +236,7 @@ namespace xgeom_skin_editor
             BindDescriptorInspector();
             xresource_editor::WireResourcePickerCallbacks(m_DescriptorInspector.m_Inspector);
             xresource_editor::WireResourcePickerCallbacks(m_SettingsInspector.m_Inspector);
-            RegisterMaterialRowLabels(m_DescriptorInspector.m_Inspector);
+            m_Import.RegisterRowLabels(m_DescriptorInspector.m_Inspector);       // the material slots: names, override arrows, Duplicate as override
             m_SettingsInspector.BindObject(*xproperty::getObjectByType<preview::render_settings>(), &m_Settings);
 
             AddPanel("Rendering Settings", dock::left,   [this] { m_SettingsInspector.Show(); });
@@ -262,54 +265,16 @@ namespace xgeom_skin_editor
             if (auto* pDesc = Desc(); pDesc && pDesc->m_SkeletonRef.m_Instance.m_Value != m_LoadedSkeleton) ReloadResource();
         }
 
-        // Each material slot of the descriptor is labelled with the material's name, and dimmed when the current nodes no longer use it.
-        static void RegisterMaterialRowLabels(xproperty::inspector& Inspector) noexcept
+        bool OnCustomChange(const xproperty::ui::undo::cmd& Cmd) noexcept override { return m_Import.OnCustomChange(Cmd); }
+
+        // The import part of the descriptor (xmaterial_instance_import_editor.h)
+        static xmaterial_instance::import::editor::slots GetImportSlots(xresource_pipeline::descriptor::base& Base) noexcept
         {
-            Inspector.m_OnResourceLeftSize.m_Delegates.clear();
-            Inspector.m_OnResourceLeftSize.Register<[](xproperty::inspector& Inspector, const xproperty::type::object&, void* pInstance, std::string_view Path, const xproperty::any&, ImGuiTreeNodeFlags Flags, const char* pName, bool& Open)
-            {
-                std::string NewName;
-                bool bDisable     = false;
-                bool bIsMaterialSlot = false;
-
-                // Only the material slots are relabelled: the delegate is called for every resource row of the inspector. (Matched by
-                // path: the property table object differs between translation units, so its address says nothing.)
-                if (Path.find("/MaterialInstance[") != std::string_view::npos)
-                {
-                    const auto Bracket = Path.rfind('[');
-                    const auto Colon   = Bracket == std::string_view::npos ? std::string_view::npos : Path.find(':', Bracket);
-                    const auto Close   = Bracket == std::string_view::npos ? std::string_view::npos : Path.find(']', Bracket);
-                    auto pDesc = static_cast<xgeom_skin::descriptor*>(pInstance);
-                    if (Colon != std::string_view::npos && Close != std::string_view::npos && Colon < Close && !pDesc->m_MaterialDetailsList.empty())
-                    {
-                        const auto Text = Path.substr(Colon + 1, Close - Colon - 1);
-                        int Index = 0;
-                        if (std::from_chars(Text.data(), Text.data() + Text.size(), Index).ec == std::errc() && Index >= 0 && Index < static_cast<int>(pDesc->m_MaterialDetailsList.size()))
-                        {
-                            NewName       = std::format("{} {}", pName, pDesc->m_MaterialDetailsList[Index].m_Name);
-                            pName         = NewName.c_str();
-                            bDisable      = pDesc->m_MaterialDetailsList[Index].m_RefCount <= 0;
-                            bIsMaterialSlot = true;
-                        }
-                    }
-                }
-
-                if (bDisable) ImGui::BeginDisabled(true);
-                // As tall as the reference widget beside the label (whoever draws the label, a reference row has one height).
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, xproperty::inspector::ResourceRowFramePadding(Inspector.m_CurrentProperty.m_Flags.m_bSmallResource));
-                // The "  " (two leading spaces) gives an ordinary resource-ref row - no arrow, no icon
-                // cluster of its own - a little breathing room against the Framed box's own left edge.
-                // A material-slot row is a per-element row of the array-controls cluster (drag/insert/
-                // delete icons already sit immediately to its left), so that same padding reads as an
-                // unwanted gap between the trashcan icon and the "[i]" index there - dropped for that
-                // case specifically, kept for every other resource-ref row using this same delegate.
-                if (!Path.empty()) Open = ImGui::TreeNodeEx(reinterpret_cast<const void*>(std::hash<std::string_view>{}(Path)), ImGuiTreeNodeFlags_Framed | Flags, bIsMaterialSlot ? "%s" : "  %s", pName);
-                else               Open = ImGui::TreeNodeEx(pName, Flags);
-                ImGui::PopStyleVar();
-                if (bDisable) ImGui::EndDisabled();
-            }>();
+            auto& D = static_cast<xgeom_skin::descriptor&>(Base);
+            xmaterial_instance::import::editor::slots S{ .m_pSettings = &D.m_ImportMaterials, .m_pRefs = &D.m_MaterialInstRefList };
+            for (auto& M : D.m_MaterialDetailsList) { S.m_Names.push_back(M.m_Name); S.m_Unused.push_back(M.m_RefCount <= 0); }
+            return S;
         }
-
 
         // The compiled geometry and the skeleton it is skinned to are let go when a compile starts: the files are about to be replaced
         void LetGo() noexcept
@@ -363,7 +328,7 @@ namespace xgeom_skin_editor
             if (auto Err = xproperty::sprop::serializer::Stream(File, m_Details, Context); Err) { m_Details = {}; return; }
 
             const auto Before = m_Document.Snapshot();
-            for (auto& Message : static_cast<xgeom_skin::descriptor&>(*m_Document.m_pDescriptor).MergeWithDetails(m_Details))
+            for (auto& Message : static_cast<xgeom_skin::descriptor&>(*m_Document.m_pDescriptor).MergeWithDetails(m_Details, m_Document.m_Guid.m_Instance))
                 std::printf("%s\n", Message.c_str());
             if (m_Document.Snapshot() != Before) m_Document.m_bDirty = true;
         }

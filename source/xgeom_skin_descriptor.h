@@ -3,6 +3,7 @@
 #pragma once
 
 #include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"
+#include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_import.h"
 #include "plugins/xskeleton.plugin/source/xskeleton_xgpu_rsc_loader.h"
 #include "plugins/xskeleton.plugin/source/xskeleton_bone_manifest.h"
 #include "xgeom_skin_details.h"
@@ -174,6 +175,8 @@ namespace xgeom_skin
             {
                 Errors.push_back(std::format("The skeleton reference is NULL"));
             }
+
+            m_ImportMaterials.Validate(Errors);
 
             //
             // Make sure tha the user has enter a file to import
@@ -561,7 +564,15 @@ namespace xgeom_skin
             return {};
         }
 
-        inline std::vector<std::string> MergeWithDetails(xgeom_skin::details& Details);
+        inline std::vector<std::string> MergeWithDetails(xgeom_skin::details& Details, xresource::instance_guid Owner);
+
+        // The material slots with the import on take the imported instances, see xmaterial_instance::import::SyncSlots
+        bool SyncMaterialSlots(xresource::instance_guid Owner) noexcept
+        {
+            std::vector<std::string> Names;
+            for (auto& M : m_MaterialDetailsList) Names.push_back(M.m_Name);
+            return xmaterial_instance::import::SyncSlots(m_ImportMaterials, Owner, Names, m_MaterialInstRefList);
+        }
 
         std::wstring                                m_ImportAsset           = {};
         pre_transform                               m_PreTranslation        = {};
@@ -573,6 +584,7 @@ namespace xgeom_skin
         std::vector<merge_group>                    m_MergeGroupList        = {};
         std::vector<delete_entry>                   m_DeleteEntryList       = {};
         xrsc::skeleton                               m_SkeletonRef           = {};   // required - Validate() errors if empty
+        xmaterial_instance::import::settings         m_ImportMaterials       = {};
         xskeleton_desc::bone_manifest                m_ResolvedSkeletonBones = {};   // NOT saved - populated in Serialize() above
 
         XPROPERTY_VDEF
@@ -604,6 +616,7 @@ namespace xgeom_skin
             >>
             , obj_member<"Deleted List", &descriptor::m_DeleteEntryList >
             , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>>
+            , obj_member<"ImportMaterials",     &descriptor::m_ImportMaterials, member_ui_open<true>, member_help<"Import the materials and textures of the model (generated, virtual resources) instead of assigning every material instance by hand">>
             , obj_member<"MaterialInstance", &descriptor::m_MaterialInstRefList, member_ui_open<true>, member_array_size_readonly<> >
             , obj_member<"ResolvedSkeletonBones", &descriptor::m_ResolvedSkeletonBones, member_flags<flags::DONT_SHOW, flags::DONT_SAVE> >
         )
@@ -641,7 +654,7 @@ namespace xgeom_skin
 
     //--------------------------------------------------------------------------------------
     inline
-        std::vector<std::string> descriptor::MergeWithDetails(xgeom_skin::details& Details)
+        std::vector<std::string> descriptor::MergeWithDetails(xgeom_skin::details& Details, xresource::instance_guid Owner)
     {
         std::vector<std::string> Messages;
 
@@ -838,6 +851,8 @@ namespace xgeom_skin
         // Recompute material references
         RecomputeMaterialReferences(Details);
 
+        // The imported instances go in the slots nobody has assigned
+        SyncMaterialSlots(Owner);
 
         return Messages;
     }

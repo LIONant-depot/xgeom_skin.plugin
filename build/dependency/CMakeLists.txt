@@ -8,6 +8,8 @@ FetchAndPopulate("https://github.com/LIONant-depot/xresource_pipeline_v2.git" "m
 FetchAndPopulate("https://github.com/LIONant-depot/xstrtool.git" "main" )
 FetchAndPopulate("https://github.com/zeux/meshoptimizer.git" "master")
 FetchAndPopulate("https://github.com/LIONant-depot/xscheduler.git" "main")
+# header only: the imported materials read their images (stb_image.h)
+FetchAndPopulate("https://github.com/nothings/stb.git" "master")
 
 # Define meshoptimizer
 DefineInterfaceComponent(meshoptimizer "dependencies"

@@ -7,6 +7,7 @@ set(COMPONENT_REGISTRY "")
 # disable strict string conformance. AMD compresator requires it!
 if(MSVC)
   add_compile_options(/Zc:strictStrings-)
+  add_compile_options(/bigobj)          # Debug: the imported-materials emitter tips the compiler TU over the section limit
 endif()
 
 include(FetchContent)

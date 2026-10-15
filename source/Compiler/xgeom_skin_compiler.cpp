@@ -13,6 +13,9 @@
 #include "../xgeom_skin.h"
 #include "../xgeom_skin_details.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "plugins/xmaterial_instance.plugin/source/Compiler/xmaterial_instance_import_compiler.h"
+
 #include "dependencies/xproperty/source/xcore/my_properties.cpp"
 #include "dependencies/xmath/source/bridge/xmath_to_xproperty.h"
 
@@ -1094,7 +1097,7 @@ xerr ConvertToCompilerMesh(void)
                 //
                 // First merge with the latest version of details
                 //
-                auto ErrorList = m_Descriptor.MergeWithDetails(m_Details);
+                auto ErrorList = m_Descriptor.MergeWithDetails(m_Details, m_ResourceGuid);
                 if (not ErrorList.empty())
                 {
                     for (auto& e : ErrorList)
@@ -1394,6 +1397,25 @@ xerr ConvertToCompilerMesh(void)
             // Fill the detail structure
             //
             ComputeDetailStructure();
+
+            //
+            // The materials of the model, as virtual Material Instances and Textures
+            //
+            if (m_Descriptor.m_ImportMaterials.m_bImport)
+            {
+                displayProgressBar("Importing Materials", 0);
+                xmaterial_instance::import::emitter Emitter
+                { .m_ProjectPath        = m_ProjectPaths.m_Project
+                , .m_CachedDescriptors  = m_ProjectPaths.m_CachedDescriptors
+                , .m_Owner              = { m_ResourceGuid, xgeom_skin::resource_type_guid_v }
+                , .m_ModelPath          = m_Descriptor.m_ImportAsset
+                , .m_Settings           = m_Descriptor.m_ImportMaterials
+                , .m_Dependencies       = m_Dependencies
+                , .m_Warning            = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }
+                };
+                Emitter.Emit(m_RawGeom.m_MaterialInstance);
+                displayProgressBar("Importing Materials", 1);
+            }
 
             //
             // OK Time to compile
