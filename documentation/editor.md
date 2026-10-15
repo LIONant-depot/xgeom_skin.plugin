@@ -21,7 +21,8 @@ render pass on the window before the frame's UI is rendered, then the geometry i
 | Skin Viewport | the geometry; right drag turns, middle drag pans, the wheel zooms |
 | Rendering Settings | the preview animation, the LOD shown, the maximum bone influences, and the pose (bind: no deformation, frozen: the skeleton's rest pose, animation) |
 | Playback | for a preview animation: clip, play / pause, go to start / end, speed, timeline |
-| Description | the scene hierarchy (right click a node) and the descriptor |
+| Scene Hierarchy | the nodes of the model (right click a node: merge groups, delete) |
+| Description | the descriptor |
 
 ## Commands
 

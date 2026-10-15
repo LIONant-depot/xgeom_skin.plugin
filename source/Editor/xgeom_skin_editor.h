@@ -242,7 +242,8 @@ namespace xgeom_skin_editor
             AddPanel("Rendering Settings", dock::left,   [this] { m_SettingsInspector.Show(); });
             AddPanel("Skin Viewport",      dock::center, [this] { RenderViewport(); }, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             AddPanel("Playback",           dock::bottom, [this] { RenderPlayback(); });
-            AddPanel("Description",        dock::right,  [this] { RenderHierarchy(); m_DescriptorInspector.Show(); });
+            AddPanel("Scene Hierarchy",    dock::left_bottom, [this] { RenderHierarchy(); });
+            AddPanel("Description",        dock::right,  [this] { m_DescriptorInspector.Show(); });
 
             if (pDevice && m_Preview.Init(*pDevice)) ReloadResource();
         }
@@ -465,18 +466,11 @@ namespace xgeom_skin_editor
             ImGui::Text("Zoom: %.0f%%    FPS: %d    Frames: %d    Loop: %s", xgpu::tools::imgui::timeline::GetZoomPercent(m_Timeline, Length), Clip.m_FPS, Clip.m_nFrames, Clip.m_bLoop ? "Yes" : "No");
         }
 
-        // The scene nodes. Right click: merge groups and deleting. Every action is a command, run once the tree is drawn.
+        // The scene nodes, in their own panel. Right click: merge groups and deleting. Every action is a command, run once the tree is drawn.
         void RenderHierarchy() noexcept
         {
             auto& Root = m_Details.m_RootNode;
-            if (!m_Document.m_pDescriptor || (Root.m_Children.empty() && Root.m_MeshList.empty())) return;
-            xeditor::PushLevelEditorInspectorHeaderColors();
-            const bool bShow = ImGui::CollapsingHeader("Scene Hierarchy", ImGuiTreeNodeFlags_DefaultOpen);
-            xeditor::PopLevelEditorInspectorHeaderColors();
-            if (!bShow) return;
-
-            ImGui::Separator();
-            ImGui::Dummy(ImVec2(0, 12));
+            if (!m_Document.m_pDescriptor || (Root.m_Children.empty() && Root.m_MeshList.empty())) { ImGui::TextDisabled("No nodes yet (compile the geometry)."); return; }
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,   ImVec2(8, 7));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(8, 2));
             ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.0f);
