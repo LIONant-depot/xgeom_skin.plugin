@@ -200,6 +200,7 @@ namespace xgeom_skin_editor
         bool                                                m_bHasGeom = false;         // the compiled geometry and its skeleton are loaded and drawable
         std::string                                         m_ErrorMessage;             // why nothing is drawn, when so
         std::vector<xmath::fmat4>                           m_PoseWorlds;
+        std::function<void(xproperty::inspector&, const xproperty::type::object&, void*, std::string_view, const xproperty::any&, ImGuiTreeNodeFlags, const char*, bool&)> m_SkeletonRowLabel;
         std::uint64_t                                       m_LoadedSkeleton = 0;       // the skeleton the descriptor named when the geometry was loaded
 
         // The preview animation: tracked apart from the setting, which is never resolved (resolving turns a reference into a pointer), so a change can be seen
@@ -237,13 +238,14 @@ namespace xgeom_skin_editor
             xresource_editor::WireResourcePickerCallbacks(m_DescriptorInspector.m_Inspector);
             xresource_editor::WireResourcePickerCallbacks(m_SettingsInspector.m_Inspector);
             m_Import.RegisterRowLabels(m_DescriptorInspector.m_Inspector);       // the material slots: names, override arrows, Duplicate as override
+            RegisterSkeletonRowLabel();                                          // and the SkeletonRef's override arrow
             m_SettingsInspector.BindObject(*xproperty::getObjectByType<preview::render_settings>(), &m_Settings);
 
             AddPanel("Rendering Settings", dock::left,   [this] { m_SettingsInspector.Show(); });
             AddPanel("Skin Viewport",      dock::center, [this] { RenderViewport(); }, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             AddPanel("Playback",           dock::bottom, [this] { RenderPlayback(); });
             AddPanel("Scene Hierarchy",    dock::left_bottom, [this] { RenderHierarchy(); });
-            AddPanel("Description",        dock::right,  [this] { m_DescriptorInspector.Show(); });
+            AddPanel("Description",        dock::right,  [this] { m_Import.DrawUnusedButton(); m_DescriptorInspector.Show(); });
 
             if (pDevice && m_Preview.Init(*pDevice)) ReloadResource();
         }
@@ -254,6 +256,45 @@ namespace xgeom_skin_editor
             xresource::g_Mgr.ReleaseRef(m_SkeletonRef);
             xresource::g_Mgr.ReleaseRef(m_AnimRef);
             m_Preview.Release();
+        }
+
+        // The SkeletonRef row, with the skeleton imported: the arrow that dismisses an override (like a material slot's). Every other row is the
+        // material import's (the inspector has one label delegate).
+        void RegisterSkeletonRowLabel() noexcept
+        {
+            m_SkeletonRowLabel = [this](xproperty::inspector& Inspector, const xproperty::type::object& Object, void* pObject, std::string_view Path, const xproperty::any& Value, ImGuiTreeNodeFlags Flags, const char* pName, bool& Open)
+            {
+                auto* pDesc = Desc();
+                if (!pDesc || !pDesc->m_ImportAnimation.m_bSkeleton || !Path.ends_with("/SkeletonRef"))
+                    return m_Import.m_RowLabel(Inspector, Object, pObject, Path, Value, Flags, pName, Open);
+
+                const auto Imported  = xgeom_skin::ImportedSkeleton(m_Document.m_Guid.m_Instance);
+                const bool bOverride = !pDesc->m_SkeletonRef.empty() && pDesc->m_SkeletonRef.m_Instance != Imported;
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, xproperty::inspector::ResourceRowFramePadding(Inspector.m_CurrentProperty.m_Flags.m_bSmallResource));
+                if (bOverride)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(170, 170, 255, 255));
+                    if (ImGui::Button(">"))
+                        xeditor::Run(m_Undo, std::format("SetProperty -Path {} -Value {}", xeditor::Quote(std::string(Path))
+                            , xeditor::Quote(std::format("{:X}, {:X}", Imported.m_Value, xrsc::skeleton_type_guid_v.m_Value))));
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Overridden: click to use the imported skeleton again");
+                    ImGui::SameLine();
+                }
+                Open = ImGui::TreeNodeEx(reinterpret_cast<const void*>(std::hash<std::string_view>{}(Path)), ImGuiTreeNodeFlags_Framed | Flags, "  %s", pName);
+                ImGui::PopStyleVar();
+                if (bOverride) ImGui::PopStyleColor();
+            };
+            m_DescriptorInspector.m_Inspector.m_OnResourceLeftSize.m_Delegates.clear();
+            m_DescriptorInspector.m_Inspector.m_OnResourceLeftSize.Register(m_SkeletonRowLabel);
+        }
+
+        // What the preview plays: the PreviewAnimRef, or else the imported animations
+        xrsc::anim_package PreviewAnim() noexcept
+        {
+            if (!m_Settings.m_PreviewAnimRef.empty()) return m_Settings.m_PreviewAnimRef;
+            auto* pDesc = Desc();
+            if (!pDesc || !pDesc->m_ImportAnimation.m_bAnimations) return {};
+            return { .m_Instance = xgeom_skin::ImportedAnimations(m_Document.m_Guid.m_Instance) };
         }
 
         desc* Desc() noexcept { return m_Document.isLoaded() ? static_cast<desc*>(m_Document.m_pDescriptor.get()) : nullptr; }
@@ -364,11 +405,11 @@ namespace xgeom_skin_editor
         // Once a frame, whichever tab is showing: a changed preview animation is picked up, and the time advances while playing
         void Render() noexcept override
         {
-            if (m_Settings.m_PreviewAnimRef.m_Instance.m_Value != m_LastAnimInstance)
+            if (const auto Anim = PreviewAnim(); Anim.m_Instance.m_Value != m_LastAnimInstance)
             {
                 xresource::g_Mgr.ReleaseRef(m_AnimRef);
-                m_AnimRef           = m_Settings.m_PreviewAnimRef;
-                m_LastAnimInstance  = m_Settings.m_PreviewAnimRef.m_Instance.m_Value;
+                m_AnimRef           = Anim;
+                m_LastAnimInstance  = Anim.m_Instance.m_Value;
                 SelectClip(-1);
                 m_bPlaying          = !m_AnimRef.empty();
             }

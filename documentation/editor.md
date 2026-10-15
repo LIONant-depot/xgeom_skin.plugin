@@ -39,6 +39,7 @@ Run as `<resource name>\<Command>`. Paths, values and node paths are text, in qu
 | `SelectClip -Clip i`, `Play`, `Pause`, `Seek -Time`, `SetSpeed -Index`, `PlaybackInfo` | the transport (view state) |
 | `SetImportMaterials -On true\|false` | imports the materials and textures of the model or stops (undoable): the slots nobody assigned take the imported instances, or give them back |
 | `DuplicateImportedMaterial -Slot i -Instance hex` | copies a slot's imported Material Instance into a resource of the project (next to the geometry) and makes it the slot's override (undoable) |
+| `RemoveUnusedImportedResources` | removes the imported resources this one no longer makes (a material left the model, an import is off): Material Instances, Textures, Skeleton, Animations, with the edits they hold (undoable: the files and the library entries come back). The Description panel shows the button (with a confirmation) while there are some; the asset browser draws them dimmed. |
 | `Save`, `Compile`, `Undo`, `Redo` | |
 | `CompileStatus [-Lines n]` | how the last compile went: state, unsaved changes, validation errors, the end of the log |
 | `SetCamera [-Yaw -Pitch -Distance -Target x,y,z]`, `GetCamera`, `FrameSubject` | the preview camera (degrees), read back, or refitted to the subject (view state, not undoable) |
@@ -56,3 +57,12 @@ resource browser and are made again by every compile, so they are not edited: a 
 override. An override has the arrow beside it (it gives the slot back the imported instance); the row's context menu has
 "Duplicate as override", which starts your own instance from the imported one. The code is in `xmaterial_instance.plugin`
 (`source/xmaterial_instance_import.h`, `source/Compiler/xmaterial_instance_import_compiler.h`, `source/Editor/xmaterial_instance_import_editor.h`).
+
+## Imported skeleton and animations
+
+For a simple animated object, without making a Skeleton and an Anim Package by hand. `ImportAnimation/bSkeleton` on: every compile makes a
+virtual Skeleton of the model, and the skin binds its bones with the bone manifest it builds itself from the same import
+(`xskeleton.plugin/source/compiler/xskeleton_merge.h`, the Skeleton compiler's own code), since that skeleton compiles after the skin. An
+empty `SkeletonRef` (or the generated one) is the imported skeleton; any other skeleton is an override, with the arrow that gives it back.
+`ImportAnimation/bAnimations` on: a virtual Anim Package with every clip of the model, on the skin's skeleton; the preview plays it when no
+`PreviewAnimRef` is set. New skins import both; the skins made before keep them off. Test: `smoke/test_imported_skeleton.py`.

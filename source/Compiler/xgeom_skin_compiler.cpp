@@ -15,6 +15,8 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "plugins/xmaterial_instance.plugin/source/Compiler/xmaterial_instance_import_compiler.h"
+#include "plugins/xskeleton.plugin/source/compiler/xskeleton_merge.h"
+#include "plugins/xanim_package.plugin/source/xanim_package_descriptor.h"
 
 #include "dependencies/xproperty/source/xcore/my_properties.cpp"
 #include "dependencies/xmath/source/bridge/xmath_to_xproperty.h"
@@ -91,6 +93,8 @@ namespace xgeom_skin_compiler
             Settings.m_bStaticGeometry = false;   // activates assimp's bone-weight import path
             Settings.m_pGeom = &m_RawGeom;
             Settings.m_pNode = &m_RootNode;
+            if (m_bImportedSkeleton)                            Settings.m_pSkeleton = &m_RawSkeleton;
+            if (m_Descriptor.m_ImportAnimation.m_bAnimations)   Settings.m_pAnims    = &m_RawAnims;   // only to know whether the model has clips
 
             if ( auto Err = Importer.Import(Path, Settings); Err )
                 return xerr::create_f<state, "Failed to import the asset">(Err);
@@ -1373,12 +1377,9 @@ xerr ConvertToCompilerMesh(void)
             }
             displayProgressBar("Loading Descriptor", 1);
 
-            //
-            // Build the raw-bone-name -> skeleton-bone-index lookup used by ConvertToCompilerMesh.
-            // The descriptor's own Serialize() override above already read the referenced skeleton's
-            // bone manifest (RunAfter in Plugin.config guarantees it exists by now).
-            //
-            BuildBoneNameMap();
+            // The imported skeleton: this compile makes it (see the end), so its bone manifest is built here from the same import
+            m_bImportedSkeleton = m_Descriptor.isImportedSkeleton(m_ResourceGuid);
+            if (m_bImportedSkeleton) m_Descriptor.m_SkeletonRef.m_Instance = xgeom_skin::ImportedSkeleton(m_ResourceGuid);
 
             //
             // Load the source data
@@ -1394,6 +1395,19 @@ xerr ConvertToCompilerMesh(void)
             displayProgressBar("Loading Mesh", 1);
 
             //
+            // Build the raw-bone-name -> skeleton-bone-index lookup used by ConvertToCompilerMesh. A referenced skeleton's bone manifest was
+            // read by the descriptor's own Serialize() override (RunAfter in Plugin.config guarantees it exists by now); the imported skeleton's
+            // is made the way the Skeleton compiler makes it (xskeleton_merge.h), from a descriptor without overrides.
+            //
+            if (m_bImportedSkeleton)
+            {
+                if (auto Err = xskeleton_desc::merge::BuildManifest<state>(xskeleton_desc::descriptor{}, m_RawSkeleton, m_Descriptor.m_ResolvedSkeletonBones
+                    , [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }); Err)
+                    return Err;
+            }
+            BuildBoneNameMap();
+
+            //
             // Fill the detail structure
             //
             ComputeDetailStructure();
@@ -1401,20 +1415,74 @@ xerr ConvertToCompilerMesh(void)
             //
             // The materials of the model, as virtual Material Instances and Textures
             //
+            xmaterial_instance::import::emitter Emitter
+            { .m_ProjectPath        = m_ProjectPaths.m_Project
+            , .m_Descriptors        = m_ProjectPaths.m_Descriptors
+            , .m_OwnerFolder        = std::format(L"{}/{}.desc", m_ProjectPaths.m_Descriptors, m_ResourcePartialPath)
+            , .m_Owner              = { m_ResourceGuid, xgeom_skin::resource_type_guid_v }
+            , .m_ModelPath          = m_Descriptor.m_ImportAsset
+            , .m_Settings           = m_Descriptor.m_ImportMaterials
+            , .m_Dependencies       = m_Dependencies
+            , .m_Warning            = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }
+            };
             if (m_Descriptor.m_ImportMaterials.m_bImport)
             {
                 displayProgressBar("Importing Materials", 0);
-                xmaterial_instance::import::emitter Emitter
-                { .m_ProjectPath        = m_ProjectPaths.m_Project
-                , .m_CachedDescriptors  = m_ProjectPaths.m_CachedDescriptors
-                , .m_Owner              = { m_ResourceGuid, xgeom_skin::resource_type_guid_v }
-                , .m_ModelPath          = m_Descriptor.m_ImportAsset
-                , .m_Settings           = m_Descriptor.m_ImportMaterials
-                , .m_Dependencies       = m_Dependencies
-                , .m_Warning            = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }
-                };
                 Emitter.Emit(m_RawGeom.m_MaterialInstance);
                 displayProgressBar("Importing Materials", 1);
+            }
+
+            //
+            // The skeleton and the animations of the model, as a virtual Skeleton and Anim Package (compiled after this skin, by cascade)
+            //
+            // They are ordinary descriptors the user may edit (the Loop of a clip, the bones of a skeleton): one that exists is loaded and given only what
+            // this skin owns (CopyOwned), a file is written only when its text changed (xresource_pipeline_virtual.h)
+            auto EmitVirtual = [&](std::string_view Type, xresource::full_guid Guid, auto& Desc, const std::string& Name, auto&& CopyOwned)
+            {
+                const auto      Folder = Emitter.DescriptorFolder(Type, Guid.m_Instance.m_Value);
+                std::error_code Ec;
+                std::filesystem::create_directories(Folder, Ec);
+                xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Desc, CopyOwned);
+                xresource_pipeline::virtual_rsc::EmitInfo(Folder, Guid, Name, Emitter.m_Owner);
+                m_Dependencies.m_VirtualResources.push_back(Guid);
+            };
+
+            if (m_bImportedSkeleton)
+            {
+                xskeleton_desc::descriptor Skeleton;
+                Skeleton.m_ImportAsset = m_Descriptor.m_ImportAsset;
+                EmitVirtual("Skeleton", { m_Descriptor.m_SkeletonRef.m_Instance, xrsc::skeleton_type_guid_v }, Skeleton, "Skeleton"
+                    , [](xskeleton_desc::descriptor& Existing, const xskeleton_desc::descriptor& Fresh) { Existing.m_ImportAsset = Fresh.m_ImportAsset; });      // the bones, the masks, the pre-transform: the user's
+            }
+
+            if (m_Descriptor.m_ImportAnimation.m_bAnimations)
+            {
+                if (m_RawAnims.empty())
+                {
+                    LogMessage(xresource_pipeline::msg_type::WARNING, "Import Animations: the model has no animations");
+                }
+                else
+                {
+                    xanim_package_desc::descriptor Package;
+                    Package.m_SkeletonRef = m_Descriptor.m_SkeletonRef;
+                    Package.m_ImportSources.push_back({ .m_Path = m_Descriptor.m_ImportAsset });     // no clip entries: every clip, with its defaults
+                    EmitVirtual("AnimPackage", { xgeom_skin::ImportedAnimations(m_ResourceGuid), xanim_package_desc::resource_type_guid_v }, Package, "Animations"
+                        , [](xanim_package_desc::descriptor& Existing, const xanim_package_desc::descriptor& Fresh)
+                        {
+                            // The skeleton and the file; the clips stay (the package matches them by OriginalName)
+                            Existing.m_SkeletonRef = Fresh.m_SkeletonRef;
+                            if (Existing.m_ImportSources.empty()) Existing.m_ImportSources.push_back({ .m_Path = Fresh.m_ImportSources.front().m_Path });
+                            else                                  Existing.m_ImportSources.front().m_Path = Fresh.m_ImportSources.front().m_Path;
+                        });
+                }
+            }
+
+            // What this skin made (materials, skeleton, animations): the list that tells the generator's from the user's
+            if (!m_Dependencies.m_VirtualResources.empty())
+            {
+                xresource_pipeline::virtual_rsc::owned_list Made;
+                Made.m_Resources = m_Dependencies.m_VirtualResources;
+                Made.Save(Emitter.m_OwnerFolder);
             }
 
             //
@@ -1482,6 +1550,9 @@ xerr ConvertToCompilerMesh(void)
         xraw3d::geom                    m_RawGeom;
         xraw3d::assimp_v3::node         m_RootNode;
         std::unordered_map<std::string, int> m_BoneNameToSkelIndex;   // built once by BuildBoneNameMap()
+        bool                            m_bImportedSkeleton = false;    // the skeleton is the one this compile makes
+        xraw3d::anim                    m_RawSkeleton;
+        std::vector<xraw3d::anim>       m_RawAnims;
     };
 
     //------------------------------------------------------------------------------------
