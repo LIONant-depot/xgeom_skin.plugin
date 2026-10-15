@@ -40,6 +40,7 @@ Run as `<resource name>\<Command>`. Paths, values and node paths are text, in qu
 | `SetImportMaterials -On true\|false` | imports the materials and textures of the model or stops (undoable): the slots nobody assigned take the imported instances, or give them back |
 | `DuplicateImportedMaterial -Slot i -Instance hex` | copies a slot's imported Material Instance into a resource of the project (next to the geometry) and makes it the slot's override (undoable) |
 | `RemoveUnusedImportedResources` | removes the imported resources this one no longer makes (a material left the model, an import is off): Material Instances, Textures, Skeleton, Animations, with the edits they hold (undoable: the files and the library entries come back). The Description panel shows the button (with a confirmation) while there are some; the asset browser draws them dimmed. |
+| `ApplyImportCompressions` | sets the compression of the generated textures to the `ImportMaterials` compressions (a color map, a color map that cuts out, a normal map, the ORME), overwriting what was chosen for them; textures of a constant stay as they are (undoable). The Description panel has the button, with a confirmation. |
 | `Save`, `Compile`, `Undo`, `Redo` | |
 | `CompileStatus [-Lines n]` | how the last compile went: state, unsaved changes, validation errors, the end of the log |
 | `SetCamera [-Yaw -Pitch -Distance -Target x,y,z]`, `GetCamera`, `FrameSubject` | the preview camera (degrees), read back, or refitted to the subject (view state, not undoable) |
@@ -53,7 +54,11 @@ e.g. `RootNode/Armature/Body`.
 `ImportMaterials/Material` (`ImportMaterials/AlphaTest` when the material is cut out by an opacity map or by the alpha of its color map), with
 virtual Textures in its slots: the color map (or the diffuse color), the normal map (or a flat one) and the ORME packed from the PBR maps of
 the model (or constants: roughness from the shininess, emission from the emissive color). They show as children of the geometry in the
-resource browser and are made again by every compile, so they are not edited: a slot takes an instance of your own instead, and is then an
+resource browser and are ordinary resources: edit them in their own editors. A compile makes the ones that do not exist and updates only what the
+geometry owns (of an instance its base material and the slots that still hold a texture the geometry made; of a texture nothing, the same texture
+has the same input), the rest stays yours. The compression of the textures made from now on is in `ImportMaterials`: `AlbedoCompression` (BC1),
+`AlbedoAlphaCompression` (BC7, color maps that cut out), `NormalCompression` (BC5), `ORMECompression` (BC7); a texture that exists is not changed by
+them, and textures of a constant are never compressed. A slot can also take an instance of your own, and is then an
 override. An override has the arrow beside it (it gives the slot back the imported instance); the row's context menu has
 "Duplicate as override", which starts your own instance from the imported one. The code is in `xmaterial_instance.plugin`
 (`source/xmaterial_instance_import.h`, `source/Compiler/xmaterial_instance_import_compiler.h`, `source/Editor/xmaterial_instance_import_editor.h`).

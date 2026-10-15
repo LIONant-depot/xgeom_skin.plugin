@@ -1448,12 +1448,13 @@ xerr ConvertToCompilerMesh(void)
             //
             // They are ordinary descriptors the user may edit (the Loop of a clip, the bones of a skeleton): one that exists is loaded and given only what
             // this skin owns (CopyOwned), a file is written only when its text changed (xresource_pipeline_virtual.h)
-            auto EmitVirtual = [&](std::string_view Type, xresource::full_guid Guid, auto& Desc, const std::string& Name, auto&& CopyOwned)
+            auto EmitVirtual = [&](std::string_view Type, xresource::full_guid Guid, auto& Desc, const std::string& Name, auto&& CopyOwned, auto&& Tolerate)
             {
                 const auto      Folder = Emitter.DescriptorFolder(Type, Guid.m_Instance.m_Value);
                 std::error_code Ec;
                 std::filesystem::create_directories(Folder, Ec);
-                xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Desc, CopyOwned);
+                if (!xresource_pipeline::virtual_rsc::EmitDescriptor(Folder, Desc, CopyOwned, std::function<bool(const std::remove_reference_t<decltype(Desc)>&)>(Tolerate)))
+                    LogMessage(xresource_pipeline::msg_type::WARNING, std::format("Import Skeleton and Animation: the descriptor of the {} could not be read: it is left as it is", Name));
                 xresource_pipeline::virtual_rsc::EmitInfo(Folder, Guid, Name, Emitter.m_Owner);
                 m_Dependencies.m_VirtualResources.push_back(Guid);
             };
@@ -1463,7 +1464,8 @@ xerr ConvertToCompilerMesh(void)
                 xskeleton_desc::descriptor Skeleton;
                 Skeleton.m_ImportAsset = m_Descriptor.m_ImportAsset;
                 EmitVirtual("Skeleton", { m_Descriptor.m_SkeletonRef.m_Instance, xrsc::skeleton_type_guid_v }, Skeleton, "Skeleton"
-                    , [](xskeleton_desc::descriptor& Existing, const xskeleton_desc::descriptor& Fresh) { Existing.m_ImportAsset = Fresh.m_ImportAsset; });      // the bones, the masks, the pre-transform: the user's
+                    , [](xskeleton_desc::descriptor& Existing, const xskeleton_desc::descriptor& Fresh) { Existing.m_ImportAsset = Fresh.m_ImportAsset; }      // the bones, the masks, the pre-transform: the user's
+                    , [](const xskeleton_desc::descriptor& D) { return !D.m_ImportAsset.empty(); });
             }
 
             if (m_bImportedSkeleton)
@@ -1480,7 +1482,8 @@ xerr ConvertToCompilerMesh(void)
                             Existing.m_SkeletonRef = Fresh.m_SkeletonRef;
                             if (Existing.m_ImportSources.empty()) Existing.m_ImportSources.push_back({ .m_Path = Fresh.m_ImportSources.front().m_Path });
                             else                                  Existing.m_ImportSources.front().m_Path = Fresh.m_ImportSources.front().m_Path;
-                        });
+                        }
+                        , [](const xanim_package_desc::descriptor& D) { return !D.m_ImportSources.empty(); });          // read, but its skeleton is not compiled (yet)
                 }
             }
 
