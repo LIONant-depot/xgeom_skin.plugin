@@ -6,6 +6,7 @@
 // and through the node commands (merge groups, deleted nodes), all undoable; the compiled geometry is previewed in 3D deformed by the pose of
 // its skeleton, or by an animation package playing on it. Hosts include this header and open editors through xeditor::open_resource_editors.
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
+#include "source/Tools/Editor/xeditor_camera_toolbar.h"
 #include "dependencies/xeditor/include/xeditor/hint.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
@@ -195,6 +196,7 @@ namespace xgeom_skin_editor
         preview::render_settings                            m_Settings;
         xeditor::inspector_panel                            m_SettingsInspector{ "Rendering Settings" };
 
+        xeditor::camera_toolbar                             m_CameraToolbar;
         xrsc::geom_skin                                     m_GeomRef;
         xrsc::skeleton                                      m_SkeletonRef;
         bool                                                m_bHasGeom = false;         // the compiled geometry and its skeleton are loaded and drawable
@@ -240,6 +242,7 @@ namespace xgeom_skin_editor
             m_SettingsInspector.BindObject(*xproperty::getObjectByType<preview::render_settings>(), &m_Settings);
 
             AddPanel("Rendering Settings", dock::left,   [this] { m_SettingsInspector.Show(); });
+            if (pDevice) m_CameraToolbar.Init(m_Document.m_Guid.m_Instance.m_Value);
             AddPanel("Skin Viewport",      dock::center, [this] { RenderViewport(); }, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             AddPanel("Playback",           dock::bottom, [this] { RenderPlayback(); });
             AddPanel("Scene Hierarchy",    dock::left_bottom, [this] { RenderHierarchy(); });
@@ -415,6 +418,11 @@ namespace xgeom_skin_editor
 
         void RenderViewport() noexcept
         {
+            m_CameraToolbar.Render(ImGui::GetContentRegionAvail(), m_Preview.m_State, [this] { RenderViewportBody(); });
+        }
+
+        void RenderViewportBody() noexcept
+        {
             auto* pHost   = xeditor::host::current();
             auto* pWindow = pHost ? pHost->find<xgpu::window>() : nullptr;
             const ImVec2 Avail = ImGui::GetContentRegionAvail();
@@ -443,6 +451,7 @@ namespace xgeom_skin_editor
                 if (m_bOpen) m_Preview.m_Renderer.Blit(CmdBuffer, m_Preview.m_RenderView);
             });
             ImGui::PopClipRect();
+            m_Preview.DrawOverlay();
         }
 
         void RenderPlayback() noexcept

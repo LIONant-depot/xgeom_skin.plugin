@@ -413,7 +413,7 @@ namespace xgeom_skin_editor::preview
                 m_EnvInstance = Settings.m_Environment.m_Instance.m_Value;
             }
             if (const xgpu::texture* pEnv = m_EnvRef.empty() ? nullptr : xresource::g_Mgr.getResource(m_EnvRef); pEnv && pEnv->isCubemap())
-                Scene.m_Sky = { .m_Intensity = 1, .m_pCubemap = pEnv };
+                Scene.m_Sky = { .m_Intensity = 1, .m_bVisible = true, .m_pCubemap = pEnv };
 
             m_Renderer.Render(Window, Scene, m_RenderView, m_View, [&](xgpu::cmd_buffer& CmdBuffer) { DrawOverlays(CmdBuffer, Geom, Settings); });
         }
