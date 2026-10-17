@@ -35,10 +35,16 @@ namespace xgeom_skin
         xmath::fvec3        m_Scale         = xmath::fvec3::fromOne();
         xmath::fvec3        m_Rotation      = xmath::fvec3::fromZero();
         xmath::fvec3        m_Translation   = xmath::fvec3::fromZero();
+        bool                m_EditorLockScale = false;      // editor only: the Scale lock toggle (editing one axis scales all three)
 
         XPROPERTY_DEF
         ( "preTransform", pre_transform
-        , obj_member<"Scale",       &pre_transform::m_Scale >
+        , obj_scope<"Scale", xproperty::settings::vector3_group
+            , obj_member<"X", &xmath::LockedScaleAxis<pre_transform, &pre_transform::m_Scale, &pre_transform::m_EditorLockScale, 0>>
+            , obj_member<"Y", &xmath::LockedScaleAxis<pre_transform, &pre_transform::m_Scale, &pre_transform::m_EditorLockScale, 1>>
+            , obj_member<"Z", &xmath::LockedScaleAxis<pre_transform, &pre_transform::m_Scale, &pre_transform::m_EditorLockScale, 2>>
+            >
+        , obj_member<"EditorLockScale", &pre_transform::m_EditorLockScale, member_flags<flags::DONT_SHOW>>
         , obj_member<"Rotation",    &pre_transform::m_Rotation >
         , obj_member<"Translation", &pre_transform::m_Translation >
         )
