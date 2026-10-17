@@ -1435,6 +1435,7 @@ xerr ConvertToCompilerMesh(void)
             , .m_Settings           = m_Descriptor.m_ImportMaterials
             , .m_Dependencies       = m_Dependencies
             , .m_Warning            = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }
+            , .m_Info               = [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::INFO, std::move(Text)); }
             };
             if (m_Descriptor.m_ImportMaterials.m_bImport)
             {
