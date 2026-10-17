@@ -482,7 +482,7 @@ xerr ConvertToCompilerMesh(void)
         , const std::vector<uint32_t>&      InputIndices
         , const TriCluster&                 c
         , uint32_t                          MaxVerts
-        , const float                       MaxExtent
+        , const float                       MaxUVExtent
         , const std::vector<float>&         BinormalSigns
         , std::vector<geom::cluster>&       OutputClusters
         , std::vector<geom::vertex>&        AllStaticVerts
@@ -509,9 +509,10 @@ xerr ConvertToCompilerMesh(void)
 
             xmath::fvec3    extent_pos      = bb_pos.m_MaxPos - bb_pos.m_MinPos;
             xmath::fvec2    extent_uv       = bb_uv.m_MaxUV - bb_uv.m_MinUV;
-            float           max_e_pos       = std::max({ extent_pos.m_X, extent_pos.m_Y, extent_pos.m_Z });
             float           max_e_uv        = std::max(extent_uv.m_X, extent_uv.m_Y);
-            bool            small_extent    = (max_e_pos <= MaxExtent && max_e_uv <= MaxExtent);
+            // Not the world size (as xgeom_static's SplitCluster): the positions are quantized relative to the cluster's own bounds, so a big
+            // mesh is not cut into more clusters (draws) than a small one with the same vertices. The UVs: 16 bits over the cluster's UV span
+            bool            small_extent    = (max_e_uv <= MaxUVExtent);
             bool            bone_ok         = bb_bone.empty() || (bb_bone.m_Max - bb_bone.m_Min) <= geom::vertex::max_bone_offset_v;
 
             std::unordered_set<uint32_t> used_verts;
@@ -715,8 +716,8 @@ xerr ConvertToCompilerMesh(void)
                         (i < c.tri_ids.size() / 2 ? c1 : c2).tri_ids.push_back(c.tri_ids[i]);
                 }
 
-                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
-                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
             }
             else
             {
@@ -768,8 +769,8 @@ xerr ConvertToCompilerMesh(void)
                     else                    c2.tri_ids.push_back(ti);
                 }
 
-                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
-                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
             }
         }
 
@@ -791,7 +792,7 @@ xerr ConvertToCompilerMesh(void)
             std::uint16_t                       current_lod_idx         = 0;
             std::uint16_t                       current_submesh_idx     = 0;
             std::uint16_t                       current_cluster_idx     = 0;
-            float                               max_extent              = target_precision * 65535.0f;
+            float                               max_uv_extent           = target_precision * 65535.0f;     // UV units: 16 bits at target_precision
 
             for (const auto& input_mesh : compiler_meshes)
             {
@@ -876,7 +877,7 @@ xerr ConvertToCompilerMesh(void)
                         for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
 
                         size_t prev_num_clusters = OutClusters.size();
-                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices);
+                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices);
 
                         out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
                         current_cluster_idx += out_sm.m_nCluster;
