@@ -338,6 +338,13 @@ xerr ConvertToCompilerMesh(void)
                     // influences already sit further apart than that in the skeleton's bone order.
                     if (nWeights > 0 && (MaxBone - MinBone) > xgeom_skin::geom::vertex::max_bone_offset_v)
                     {
+                        std::string Bones;
+                        for (int j = 0; j < nWeights; ++j)
+                        {
+                            const auto& RawName = m_RawGeom.m_Bone[RawVert.m_Weight[j].m_iBone].m_Name;
+                            Bones += std::format("{}{} (#{}, {:.3f})", j ? ", " : "", RawName, m_BoneNameToSkelIndex.find(RawName)->second, RawVert.m_Weight[j].m_Weight);
+                        }
+                        LogMessage(xresource_pipeline::msg_type::ERROR, std::format("The bones of a vertex of {} are {} apart in the skeleton: {}", Mesh.m_Name.data(), MaxBone - MinBone, Bones));
                         return xerr::create_f<state, "A skin vertex's own bone weights span more skeleton bones than a single cluster can address - author-time skeleton bone order makes this vertex unrepresentable">();
                     }
                 }
@@ -514,6 +521,8 @@ xerr ConvertToCompilerMesh(void)
             // mesh is not cut into more clusters (draws) than a small one with the same vertices. The UVs: 16 bits over the cluster's UV span
             bool            small_extent    = (max_e_uv <= MaxUVExtent);
             bool            bone_ok         = bb_bone.empty() || (bb_bone.m_Max - bb_bone.m_Min) <= geom::vertex::max_bone_offset_v;
+            // One triangle whose UVs span more than a cluster's is a cluster anyway (its UVs lose precision): splitting it again would never end
+            small_extent = small_extent || c.tri_ids.size() <= 1;
 
             std::unordered_set<uint32_t> used_verts;
             if (small_extent && bone_ok)
@@ -767,6 +776,15 @@ xerr ConvertToCompilerMesh(void)
 
                     if (cent < split_pos)   c1.tri_ids.push_back(ti);
                     else                    c2.tri_ids.push_back(ti);
+                }
+
+                // Every centroid on one side (triangles stacked on the split, a UV span the positions do not follow): half and half by index, or the
+                // same cluster would be split again forever (a stack overflow)
+                if (c1.tri_ids.empty() || c2.tri_ids.empty())
+                {
+                    c1.tri_ids.clear(); c2.tri_ids.clear();
+                    for (std::size_t i = 0; i < c.tri_ids.size(); ++i)
+                        (i < c.tri_ids.size() / 2 ? c1 : c2).tri_ids.push_back(c.tri_ids[i]);
                 }
 
                 RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
@@ -1222,7 +1240,7 @@ xerr ConvertToCompilerMesh(void)
                 
                 displayProgressBar("Generating Final Mesh", 1);
             }
-            catch (std::runtime_error Error )
+            catch (const std::exception& Error )
             {
                 LogMessage(xresource_pipeline::msg_type::ERROR, std::format("{}", Error.what()));
                 return xerr::create_f<state, "Exception thrown">();
@@ -1497,9 +1515,9 @@ xerr ConvertToCompilerMesh(void)
             }
 
             //
-            // OK Time to compile
+            // OK Time to compile (a failure ends here: what follows would write a geometry that was not made)
             //
-            Compile();
+            if (auto Err = Compile(); Err) return Err;
 
             //
             // Serialize the details structure
