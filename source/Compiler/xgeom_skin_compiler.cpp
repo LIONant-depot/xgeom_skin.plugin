@@ -924,6 +924,8 @@ xerr ConvertToCompilerMesh(void)
             {   // the size of the mesh as compiled (in the space of its skeleton, its PreTransform applied)
                 const auto Size = result.m_BBox.getSize();
                 LogMessage(xresource_pipeline::msg_type::INFO, std::format("Size {:.4f} {:.4f} {:.4f}", Size.m_X, Size.m_Y, Size.m_Z));
+                const auto Center = result.m_BBox.getCenter();
+                LogMessage(xresource_pipeline::msg_type::INFO, std::format("Center {:.4f} {:.4f} {:.4f}", Center.m_X, Center.m_Y, Center.m_Z));
             }
 
             //
