@@ -36,9 +36,11 @@ namespace xgeom_skin
         xmath::fvec3        m_Rotation      = xmath::fvec3::fromZero();
         xmath::fvec3        m_Translation   = xmath::fvec3::fromZero();
         bool                m_EditorLockScale = false;      // editor only: the Scale lock toggle (editing one axis scales all three)
+        bool                m_bAutoUnits    = false;        // the units of the source to meters, before Scale: on for a new descriptor (SetupNew), off for one from before it (its Scale is the user's)
 
         XPROPERTY_DEF
         ( "preTransform", pre_transform
+        , obj_member<"AutoUnits",   &pre_transform::m_bAutoUnits, member_help<"Scale the source to meters (the engine's unit) before the Scale below: by the units the file says (FBX UnitScaleFactor; glTF is in meters), or for a file without units (OBJ) a guess from its size (a model too large for meters is in cm). The compile log says what it detected and applied. Off: the Scale alone">>
         , obj_scope<"Scale", xproperty::settings::vector3_group
             , obj_member<"X", &xmath::LockedScaleAxis<pre_transform, &pre_transform::m_Scale, &pre_transform::m_EditorLockScale, 0>>
             , obj_member<"Y", &xmath::LockedScaleAxis<pre_transform, &pre_transform::m_Scale, &pre_transform::m_EditorLockScale, 1>>
@@ -185,6 +187,11 @@ namespace xgeom_skin
 
         void SetupFromSource(std::string_view FileName) override
         {
+        }
+
+        void SetupNew() noexcept override
+        {
+            m_PreTranslation.m_bAutoUnits = true;
         }
 
         void Validate(std::vector<std::string>& Errors) const noexcept override

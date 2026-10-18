@@ -93,6 +93,7 @@ namespace xgeom_skin_compiler
             Settings.m_bStaticGeometry = false;   // activates assimp's bone-weight import path
             Settings.m_pGeom = &m_RawGeom;
             Settings.m_pNode = &m_RootNode;
+            Settings.m_pUnits = &m_Units;
             if (m_bImportedSkeleton)                            Settings.m_pSkeleton = &m_RawSkeleton;
             if (m_bImportedSkeleton)                            Settings.m_pAnims    = &m_RawAnims;   // only to know whether the model has clips
 
@@ -1166,6 +1167,7 @@ xerr ConvertToCompilerMesh(void)
                 // adjustment - applied on top of the mandatory skeleton correction above).
                 //
                 if (   m_Descriptor.m_PreTranslation.m_Scale       != xmath::fvec3::fromOne()
+                    || m_UnitScale                                 != 1
                     || m_Descriptor.m_PreTranslation.m_Translation != xmath::fvec3::fromZero()
                     || m_Descriptor.m_PreTranslation.m_Rotation    != xmath::fvec3::fromZero() )
                 {
@@ -1176,7 +1178,7 @@ xerr ConvertToCompilerMesh(void)
                     Rot.m_Pitch = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_X) };
                     Rot.m_Yaw   = xmath::radian{ xmath::DegToRad(m_Descriptor.m_PreTranslation.m_Rotation.m_Y) };
 
-                    const xmath::fmat4 M(m_Descriptor.m_PreTranslation.m_Scale, Rot, m_Descriptor.m_PreTranslation.m_Translation);
+                    const xmath::fmat4 M(m_Descriptor.m_PreTranslation.m_Scale * m_UnitScale, Rot, m_Descriptor.m_PreTranslation.m_Translation);
                     const xmath::fmat3 M2(Rot);
                     for (auto& E : m_RawGeom.m_Vertex )
                     {
@@ -1397,6 +1399,20 @@ xerr ConvertToCompilerMesh(void)
                 return Err;
             displayProgressBar("Loading Mesh", 1);
 
+            // AutoUnits (a new descriptor): the source to meters, by what its file says or a guess from its size (a character is up to 25 m).
+            // Only with the imported skeleton (made in the same units below); a referenced skeleton's PreTransform is already applied to the
+            // vertices (ApplyingSkeletonPreTransform), so the units are the skeleton's and scaling again would apply them twice
+            if (m_Descriptor.m_PreTranslation.m_bAutoUnits && !m_bImportedSkeleton)
+            {
+                LogMessage(xresource_pipeline::msg_type::INFO, "AutoUnits: the skin uses the units of its referenced skeleton (its PreTransform), nothing else applied");
+            }
+            else if (m_Descriptor.m_PreTranslation.m_bAutoUnits)
+            {
+                const auto Units = xraw3d::assimp_v3::ResolveUnits(m_Units, m_RawGeom.m_Vertex, 25.0f);
+                m_UnitScale = Units.m_MetersPerUnit;
+                LogMessage(xresource_pipeline::msg_type::INFO, std::format("AutoUnits: {}", Units.m_Reason));
+            }
+
             //
             // Build the raw-bone-name -> skeleton-bone-index lookup used by ConvertToCompilerMesh. A referenced skeleton's bone manifest was
             // read by the descriptor's own Serialize() override (RunAfter in Plugin.config guarantees it exists by now); the imported skeleton's
@@ -1465,6 +1481,7 @@ xerr ConvertToCompilerMesh(void)
             {
                 xskeleton_desc::descriptor Skeleton;
                 Skeleton.m_ImportAsset = m_Descriptor.m_ImportAsset;
+                Skeleton.m_PreTransform.m_Scale = xmath::fvec3(m_UnitScale, m_UnitScale, m_UnitScale);    // a new skeleton (an existing one is the user's) in the units of its skin: its bind poses match the vertices (AutoUnits)
                 EmitVirtual("Skeleton", { m_Descriptor.m_SkeletonRef.m_Instance, xrsc::skeleton_type_guid_v }, Skeleton, "Skeleton"
                     , [](xskeleton_desc::descriptor& Existing, const xskeleton_desc::descriptor& Fresh) { Existing.m_ImportAsset = Fresh.m_ImportAsset; }      // the bones, the masks, the pre-transform: the user's
                     , [](const xskeleton_desc::descriptor& D) { return !D.m_ImportAsset.empty(); });
@@ -1561,6 +1578,8 @@ xerr ConvertToCompilerMesh(void)
         std::vector<mesh>               m_CompilerMesh;
         xraw3d::geom                    m_RawGeom;
         xraw3d::assimp_v3::node         m_RootNode;
+        xraw3d::assimp_v3::units        m_Units;                        // of the source file (LoadRaw)
+        float                           m_UnitScale     { 1 };          // AutoUnits: the source to meters, before the PreTranslation (and of the skeleton it makes)
         std::unordered_map<std::string, int> m_BoneNameToSkelIndex;   // built once by BuildBoneNameMap()
         bool                            m_bImportedSkeleton = false;    // the skeleton is the one this compile makes
         xraw3d::anim                    m_RawSkeleton;

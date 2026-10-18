@@ -7,6 +7,7 @@
 // its skeleton, or by an animation package playing on it. Hosts include this header and open editors through xeditor::open_resource_editors.
 #include "source/Tools/Editor/xeditor_descriptor_editor.h"
 #include "source/Tools/Editor/xeditor_camera_toolbar.h"
+#include "source/Tools/Editor/xeditor_transform_gizmo.h"
 #include "dependencies/xeditor/include/xeditor/hint.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_inspector_pickers.h"
 #include "dependencies/xresource_pipeline_v2/source/editor/xresource_editor_resources.h"
@@ -197,9 +198,13 @@ namespace xgeom_skin_editor
         xeditor::inspector_panel                            m_SettingsInspector{ "Rendering Settings" };
 
         xeditor::camera_toolbar                             m_CameraToolbar;
+        xeditor::transform_gizmo::state                     m_Gizmo;                    // the Move / Rotate / Scale gizmo of the view: the descriptor's PreTranslation
+        xeditor::transform_gizmo::actions                   m_GizmoActions{ m_Gizmo };  // its keys (Preview/ToolMove...)
+        void RegisterActions(ximgui::actions::context& Ctx) noexcept override { Ctx.Scope(m_GizmoActions, "Preview"); }
         xrsc::geom_skin                                     m_GeomRef;
         xrsc::skeleton                                      m_SkeletonRef;
         bool                                                m_bHasGeom = false;         // the compiled geometry and its skeleton are loaded and drawable
+        xeditor::transform_gizmo::pre                       m_Compiled;                 // the PreTranslation the loaded geometry was compiled with: the preview shows the one being edited against it
         std::string                                         m_ErrorMessage;             // why nothing is drawn, when so
         std::vector<xmath::fmat4>                           m_PoseWorlds;
         std::uint64_t                                       m_LoadedSkeleton = 0;       // the skeleton the descriptor named when the geometry was loaded
@@ -242,7 +247,7 @@ namespace xgeom_skin_editor
             m_SettingsInspector.BindObject(*xproperty::getObjectByType<preview::render_settings>(), &m_Settings);
 
             AddPanel("Rendering Settings", dock::left,   [this] { m_SettingsInspector.Show(); });
-            if (pDevice) m_CameraToolbar.Init(m_Document.m_Guid.m_Instance.m_Value);
+            if (pDevice) m_CameraToolbar.Init(m_Document.m_Guid.m_Instance.m_Value, 454.0f, 310.0f);      // with the Human toggle and the gizmo's tools
             AddPanel("Skin Viewport",      dock::center, [this] { RenderViewport(); }, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
             AddPanel("Playback",           dock::bottom, [this] { RenderPlayback(); });
             AddPanel("Scene Hierarchy",    dock::left_bottom, [this] { RenderHierarchy(); });
@@ -332,6 +337,7 @@ namespace xgeom_skin_editor
             m_Preview.m_Radius   = std::max(0.01f, pGeom->m_BBox.getRadius());
             m_Preview.m_bReframe = true;
             m_Preview.RebuildMaterials(*pGeom);
+            m_Compiled = xeditor::transform_gizmo::PreOf(pDesc->m_PreTranslation);
             m_bHasGeom = true;
         }
 
@@ -418,7 +424,12 @@ namespace xgeom_skin_editor
 
         void RenderViewport() noexcept
         {
-            m_CameraToolbar.Render(ImGui::GetContentRegionAvail(), m_Preview.m_State, [this] { RenderViewportBody(); });
+            m_CameraToolbar.Render(ImGui::GetContentRegionAvail(), m_Preview.m_State, [this] { RenderViewportBody(); }
+                                  , [this](bool bHorizontal, float ButtonHeight)
+                                    {
+                                        xeditor::scale_reference::Button(bHorizontal, ButtonHeight);
+                                        xeditor::transform_gizmo::Buttons(m_Gizmo, bHorizontal, ButtonHeight);
+                                    });
         }
 
         void RenderViewportBody() noexcept
@@ -427,10 +438,21 @@ namespace xgeom_skin_editor
             auto* pWindow = pHost ? pHost->find<xgpu::window>() : nullptr;
             const ImVec2 Avail = ImGui::GetContentRegionAvail();
             const ImVec2 Min   = ImGui::GetCursorScreenPos();
+            xeditor::transform_gizmo::layer GizmoLayer(m_Gizmo, *ImGui::GetWindowDrawList());     // the gizmo over all of it
             ImGui::GetWindowDrawList()->AddRectFilled(Min, ImVec2(Min.x + Avail.x, Min.y + Avail.y), IM_COL32(115, 115, 115, 255));
-            ImGui::InvisibleButton("##SkinViewport", Avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
-            xeditor::PreviewGestures();
-            m_Preview.HandleInput();
+
+            // The gizmo (W E R) on the descriptor's PreTranslation, before the view's button: while it is hovered a Dummy stands in for the button
+            // (the camera and the keys still work), and only its drag keeps the camera out
+            bool bGizmo = false;
+            if (auto* pDesc = Desc(); pDesc && m_Preview.m_bReady && m_bHasGeom)
+                bGizmo = xeditor::transform_gizmo::Run(m_Gizmo, *this, GizmoLayer, m_Preview.m_View, Min, Avail, xeditor::transform_gizmo::TargetOf(pDesc->m_PreTranslation));
+            if (bGizmo) ImGui::Dummy(Avail);
+            else        ImGui::InvisibleButton("##SkinViewport", Avail, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+            if (!xeditor::transform_gizmo::Dragging())
+            {
+                xeditor::PreviewGestures();
+                m_Preview.HandleInput();
+            }
 
             if (!m_Preview.m_bReady || !pWindow) { ImGui::SetCursorScreenPos(Min); ImGui::TextDisabled("The 3D view needs a GPU device (open from the editor)."); return; }
             auto* pGeom     = m_bHasGeom ? xresource::g_Mgr.getResource(m_GeomRef) : nullptr;
@@ -438,6 +460,7 @@ namespace xgeom_skin_editor
             if (!pGeom || !pSkeleton) { ImGui::SetCursorScreenPos(Min); ImGui::TextWrapped("%s", m_ErrorMessage.empty() ? "Nothing to show." : m_ErrorMessage.c_str()); return; }
 
             m_Preview.UpdateView(Min, Avail.x, Avail.y);
+            if (auto* pDesc = Desc()) m_Preview.m_PendingL2W = xeditor::transform_gizmo::PendingTransform(m_Compiled, xeditor::transform_gizmo::PreOf(pDesc->m_PreTranslation));
             EvaluatePose(*pSkeleton);
             m_Preview.UploadBones(*pSkeleton, m_PoseWorlds, m_Settings.m_PoseType);
             m_Preview.RenderShadow(*pWindow, *pGeom, m_Settings);
@@ -451,6 +474,11 @@ namespace xgeom_skin_editor
                 if (m_bOpen) m_Preview.m_Renderer.Blit(CmdBuffer, m_Preview.m_RenderView);
             });
             ImGui::PopClipRect();
+            {   // the human scale reference: 1.8 m beside the mesh as drawn (the Scale being edited)
+                xmath::fvec3 BoxMin = pGeom->m_BBox.m_Min, BoxMax = pGeom->m_BBox.m_Max;
+                xeditor::scale_reference::TransformBox(m_Preview.m_PendingL2W, BoxMin, BoxMax);
+                xeditor::scale_reference::DrawBesideBox(*ImGui::GetWindowDrawList(), m_Preview.m_View.getW2C(), m_Preview.m_View.getPosition(), Min, Avail, BoxMin, BoxMax);
+            }
             m_Preview.DrawOverlay();
         }
 
