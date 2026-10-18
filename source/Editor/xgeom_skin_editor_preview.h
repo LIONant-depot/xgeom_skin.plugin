@@ -79,8 +79,9 @@ namespace xgeom_skin_editor::preview
         std::uint32_t   m_MaxInfluences;
     };
 
-    // One buffer of bone matrices, sized once and filled every frame
-    constexpr int g_MaxBonesSupported = 256;
+    // One buffer of bone matrices, filled every frame and indexed by the full skeleton bone index (a palette names any bone): it starts at
+    // this size and grows to the skeleton's bone count
+    constexpr int g_MinBonesAllocated = 256;
 
     // What drives the bones this frame: the skeleton's rest pose, the pose the mesh was skinned in (no deformation at all), or an animation
     enum class pose_type : std::uint8_t { BIND_POSE, FROZEN_POSE, ANIMATION_POSE };
@@ -142,6 +143,7 @@ namespace xgeom_skin_editor::preview
         xgpu::tools::view           m_LightView;
 
         xgpu::buffer                m_ShadowUBO, m_BoneMatrices;
+        xgpu::device*               m_pDevice = nullptr;        // grows m_BoneMatrices
         xgpu::vertex_descriptor     m_ShadowVD;
         xgpu::pipeline              m_ShadowPipeline;
         xgpu::pipeline_instance     m_ShadowInstance;
@@ -185,7 +187,8 @@ namespace xgeom_skin_editor::preview
             m_RenderView.m_Background = { 0.45f, 0.45f, 0.45f, 1.0f };     // the grey the preview and the thumbnails always had
 
             if (!Ok(Device.Create(m_ShadowUBO, { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(ubo_shadow_generation_mesh), .m_EntryCount = 100 }))) return false;
-            if (!Ok(Device.Create(m_BoneMatrices, { .m_Type = xgpu::buffer::type::STORAGE, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(xmath::fmat4), .m_EntryCount = g_MaxBonesSupported }))) return false;
+            m_pDevice = &Device;
+            if (!Ok(Device.Create(m_BoneMatrices, { .m_Type = xgpu::buffer::type::STORAGE, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(xmath::fmat4), .m_EntryCount = g_MinBonesAllocated }))) return false;
 
             // The shadow pass reads stream 0 only (the fused position + skin data: 3 x int16 position, the 6 packed bytes read back as a uint16
             // and two uint16 - formats every driver takes; see xLIONRender's skin vertex descriptor for the whole layout)
@@ -207,6 +210,7 @@ namespace xgeom_skin_editor::preview
                 { xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC }
                 , xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }
                 , xgpu::pipeline::uniform_binds{ .m_BindIndex = 1, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }
+                , xgpu::pipeline::uniform_binds{ .m_BindIndex = 8, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }     // the BoneMap
                 };
                 auto Shaders = std::array<const xgpu::shader*, 2>{ &Frag, &Vert };
                 if (!Ok(Device.Create(m_ShadowPipeline, xgpu::pipeline::setup
@@ -224,6 +228,7 @@ namespace xgeom_skin_editor::preview
                 { xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::UBO_DYNAMIC }
                 , xgpu::pipeline::uniform_binds{ .m_BindIndex = 0, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }
                 , xgpu::pipeline::uniform_binds{ .m_BindIndex = 1, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }
+                , xgpu::pipeline::uniform_binds{ .m_BindIndex = 8, .m_Usage = { .m_bVertex = true }, .m_Type = xgpu::pipeline::uniform_binds::type::SSBO_STATIC }     // the BoneMap
                 };
                 xgpu::shader Frag, Geom, Vert;
                 if (!Ok(Device.Create(Frag, ShaderSetup(xgpu::shader::type::bit::FRAGMENT, g_WireFragShader)))) return false;
@@ -329,7 +334,14 @@ namespace xgeom_skin_editor::preview
         void UploadBones(const xskeleton::skeleton& Skeleton, const std::vector<xmath::fmat4>& World, pose_type Pose) noexcept
         {
             auto Bones = Skeleton.getBones();
-            const int nBones = std::min<int>(static_cast<int>(Bones.size()), g_MaxBonesSupported);
+            const int nBones = static_cast<int>(Bones.size());
+            if (nBones > m_BoneMatrices.getEntryCount())
+            {
+                // The old buffer may still be read by frames in flight: the device frees it later. The same object keeps the new one, so the
+                // renderer's mesh (which points at m_BoneMatrices) and the descriptor sets (keyed by the Vulkan buffer) follow it
+                m_pDevice->Destroy(std::move(m_BoneMatrices));
+                if (!Ok(m_pDevice->Create(m_BoneMatrices, { .m_Type = xgpu::buffer::type::STORAGE, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(xmath::fmat4), .m_EntryCount = nBones }))) return;
+            }
             m_SkinMatrices.resize(Bones.size());
             if (Pose == pose_type::BIND_POSE) std::fill(m_SkinMatrices.begin(), m_SkinMatrices.end(), xmath::fmat4::fromIdentity());
             else for (int i = 0; i < static_cast<int>(Bones.size()); ++i) m_SkinMatrices[i] = World[i] * Bones[i].m_InvBindPose;
@@ -355,7 +367,7 @@ namespace xgeom_skin_editor::preview
             auto CmdBuffer = Window.StartRenderPass(m_ShadowPass);
             CmdBuffer.setStreamingBuffers({ &Geom.IndexBuffer(), 2 });      // the index buffer and stream 0
 
-            std::array StaticSSBO{ &Geom.ClusterBuffer(), &m_BoneMatrices };
+            std::array StaticSSBO{ &Geom.ClusterBuffer(), &m_BoneMatrices, &Geom.BoneMapBuffer() };
             const std::uint32_t MaxInfluences = static_cast<std::uint32_t>(std::clamp(Settings.m_MaxInfluences, 1, 4));
             for (auto& M : Geom.getMeshes())
             {
@@ -450,7 +462,7 @@ namespace xgeom_skin_editor::preview
             // Everything is drawn relative to the camera
             const auto L2w = xmath::fmat4::fromTranslation(-m_View.getPosition());
             const auto w2C = m_View.getW2C() * xmath::fmat4::fromTranslation(m_View.getPosition());
-            std::array  StaticSSBO{ &Geom.ClusterBuffer(), &m_BoneMatrices };
+            std::array  StaticSSBO{ &Geom.ClusterBuffer(), &m_BoneMatrices, &Geom.BoneMapBuffer() };
 
             if (Geom.m_nVertices && Settings.m_bWireFrame)
             {

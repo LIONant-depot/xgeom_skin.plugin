@@ -56,8 +56,16 @@ namespace xgeom_skin_editor
 
             float MinBase = 0, MaxBase = 0;
             bool  bFirst  = true;
+            std::vector<std::uint32_t> PaletteStarts;
             for (auto& C : Geom.getClusterData())
             {
+                if (C.m_PosTrasnlationAndWPADDING.getMode() == static_cast<std::uint32_t>(xgeom_skin::geom::bone_addressing::PALETTE))
+                {
+                    ++m_nPaletteClusters;
+                    PaletteStarts.push_back(C.m_PosTrasnlationAndWPADDING.getPayload());
+                    continue;
+                }
+                ++m_nBaseOffsetClusters;
                 const float Base = C.m_PosScaleAndBaseBoneIndex.m_W;
                 MinBase = bFirst ? Base : std::min(MinBase, Base);
                 MaxBase = bFirst ? Base : std::max(MaxBase, Base);
@@ -66,11 +74,19 @@ namespace xgeom_skin_editor
             m_MinBaseBone = static_cast<int>(MinBase);
             m_MaxBaseBone = static_cast<int>(MaxBase);
 
+            // The palettes lie one after the other in the BoneMap (identical ones share their start): each one ends where the next begins
+            std::ranges::sort(PaletteStarts);
+            PaletteStarts.erase(std::unique(PaletteStarts.begin(), PaletteStarts.end()), PaletteStarts.end());
+            m_nBoneMap        = static_cast<int>(Geom.m_nBoneMap);
+            m_nUniquePalettes = static_cast<int>(PaletteStarts.size());
+            for (std::size_t i = 0; i < PaletteStarts.size(); ++i)
+                m_LargestPalette = std::max(m_LargestPalette, static_cast<int>((i + 1 < PaletteStarts.size() ? PaletteStarts[i + 1] : Geom.m_nBoneMap) - PaletteStarts[i]));
+
             std::vector<bool> Used(static_cast<std::size_t>(std::max(nBones, 1)), false);
             std::uint64_t     Influences = 0;
             for (auto& Cluster : Geom.getClusters())
             {
-                const int Base = static_cast<int>(Geom.getClusterData()[&Cluster - Geom.getClusters().data()].m_PosScaleAndBaseBoneIndex.m_W);
+                const auto iCluster = static_cast<std::size_t>(&Cluster - Geom.getClusters().data());
                 for (std::uint32_t i = 0; i < Cluster.m_nVertices; ++i)
                 {
                     const auto& V = Geom.getVertices()[Cluster.m_iVertex + i];
@@ -80,7 +96,7 @@ namespace xgeom_skin_editor
                     {
                         if (W[j] <= 0.0005f) continue;
                         ++n;
-                        const int Bone = Base + V.getBoneOffset(j);
+                        const int Bone = static_cast<int>(Geom.getVertexBone(iCluster, V, j));
                         if (Bone >= 0 && Bone < nBones) Used[Bone] = true;
                     }
                     n = std::max(n, 1);
@@ -95,7 +111,7 @@ namespace xgeom_skin_editor
             m_VertexStreams[0].m_Name = "Position and skin";
             m_VertexStreams[0].m_Elements.resize(3);
             m_VertexStreams[0].m_Elements[0] = { "SINT16_3D",  "(X,Y,Z) 16 bit normalized positions, decoded with the cluster's scale and translation" };
-            m_VertexStreams[0].m_Elements[1] = { "UINT8_4D",   "the 4 bone offsets, 7 bits each: the vertex's bone is the cluster's base bone + the offset" };
+            m_VertexStreams[0].m_Elements[1] = { "UINT8_4D",   "the 4 bone offsets, 7 bits each: the vertex's bone is the cluster's base bone + the offset, or the offset's entry in the cluster's palette" };
             m_VertexStreams[0].m_Elements[2] = { "UINT8_3D",   "the 3 largest weights (8, 7 and 5 bits): the 4th is what is left of 1, and fewer influences cut the rest (the weight LODs)" };
 
             m_VertexStreams[1].m_Name = "Extras";
@@ -117,6 +133,7 @@ namespace xgeom_skin_editor
             m_nMeshes = m_nLODs = m_nSubmeshes = m_nIndices = 0;
             m_BytesVertices = m_BytesExtras = m_BytesIndices = m_BytesClusters = 0;
             m_nBones = m_nBonesUsed = m_MinBaseBone = m_MaxBaseBone = m_MaxInfluences = 0;
+            m_nBaseOffsetClusters = m_nPaletteClusters = m_nBoneMap = m_nUniquePalettes = m_LargestPalette = 0;
             m_AverageInfluences = 0;
             m_Skeleton.clear();
             m_Animation.clear();
@@ -136,6 +153,7 @@ namespace xgeom_skin_editor
         int                                         m_nMeshes = 0, m_nLODs = 0, m_nSubmeshes = 0, m_nIndices = 0;
         int                                         m_BytesVertices = 0, m_BytesExtras = 0, m_BytesIndices = 0, m_BytesClusters = 0;
         int                                         m_nBones = 0, m_nBonesUsed = 0, m_MinBaseBone = 0, m_MaxBaseBone = 0, m_MaxInfluences = 0;
+        int                                         m_nBaseOffsetClusters = 0, m_nPaletteClusters = 0, m_nBoneMap = 0, m_nUniquePalettes = 0, m_LargestPalette = 0;
         float                                       m_AverageInfluences = 0;
         std::vector<stream>                         m_VertexStreams;
 
@@ -171,7 +189,13 @@ namespace xgeom_skin_editor
             , obj_member<"nBonesUsed",      +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_nBonesUsed); }, member_help<"Bones that move at least one vertex">>
             , obj_member<"MaxInfluences",   +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_MaxInfluences); }, member_help<"The most bones that move one vertex (4 at most)">>
             , obj_member<"AverageInfluences", +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = xeditor::geom_facts::FormatNumber(O.m_AverageInfluences, 2); }, member_help<"Bones per vertex on average: what the weight LODs and the vertex cost follow">>
-            , obj_member<"BaseBones",       +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_MinBaseBone) + " .. " + Count(O.m_MaxBaseBone); }, member_help<"The range of the clusters' base bone: a vertex's bone is its cluster's base bone plus a 7 bit offset, so one cluster reaches 128 bones from its base">>
+            , obj_member<"BaseBones",       +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_MinBaseBone) + " .. " + Count(O.m_MaxBaseBone); }, member_help<"The range of the base-offset clusters' base bone: a vertex's bone is its cluster's base bone plus a 7 bit offset, so one cluster reaches 128 bones from its base">>
+            , obj_member<"BaseOffsetClusters", +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_nBaseOffsetClusters); }, member_help<"Clusters whose bones span at most 128 skeleton slots: base bone + offset, no extra data">>
+            , obj_member<"PaletteClusters",    +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_nPaletteClusters); },    member_help<"Clusters whose bones lie further apart: a vertex's 7 bit index picks a bone from the cluster's palette (up to 128 bones)">>
+            , obj_member<"BoneMapEntries",     +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_nBoneMap); },            member_help<"The palettes' skeleton bone indices, all clusters together (16 bits each)">>
+            , obj_member<"UniquePalettes",     +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_nUniquePalettes); },     member_help<"Distinct palettes: clusters with the same bones share one">>
+            , obj_member<"LargestPalette",     +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Count(O.m_LargestPalette); },      member_help<"Bones in the largest palette (128 at most)">>
+            , obj_member<"BoneMapBytes",       +[](skin_geom_inspector& O, bool bRead, std::string& Value) { if (bRead) Value = Bytes(O.m_nBoneMap * 2); },        member_help<"The memory of the palettes">>
             , member_flags<flags::SHOW_READONLY>
             >
         , obj_scope< "Memory"

@@ -20,14 +20,13 @@ mb_position getVertexLocalPosition()
 {
     // Select cluster by push constant index
     ClusterData selectedCluster = cluster[push.clusterIndex];
-    const uint  baseBoneIndex   = uint(selectedCluster.posScale.w);
 
     // Decode compressed position from int16 to [-1,1], then to local (bind pose) space
     const vec3 norm_pos = (vec3(in_Pos) + 32768.0) / 32767.5 - 1.0;
     const vec4 bindPos  = vec4(norm_pos.xyz * selectedCluster.posScale.xyz + selectedCluster.posTranslation.xyz, 1.0);
 
     const uint lo32 = in_PackedLo | (in_PackedHi.x << 16);
-    const mat4 Skin = ComputeSkinMatrix(lo32, in_PackedHi.y, baseBoneIndex, push.maxInfluences);
+    const mat4 Skin = ComputeSkinMatrix(lo32, in_PackedHi.y, selectedCluster, push.maxInfluences);
 
     mb_position Position;
     Position.Value = Skin * bindPos;

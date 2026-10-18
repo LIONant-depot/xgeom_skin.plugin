@@ -15,6 +15,9 @@ namespace xgeom_skin_compiler
     {
         static std::unique_ptr<instance> Create(void);
     };
+
+    // -SELFTEST: the bone addressing on synthetic meshes (xgeom_skin_compiler.cpp); the number of failed checks
+    int SelfTest(void);
 }
 
 #endif

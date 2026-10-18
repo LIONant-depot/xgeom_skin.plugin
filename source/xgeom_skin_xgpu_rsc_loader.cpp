@@ -52,6 +52,28 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
     // Upgrade to the runtime version
     xgeom_skin::xgpu::geom* pXGPUGeom = static_cast<xgeom_skin::xgpu::geom*>(pGeom);
 
+    // A corrupt bone addressing reads bone matrices past the skeleton on the GPU: check it before the upload (Debug)
+    #ifndef NDEBUG
+    {
+        std::size_t nBones = 0;
+        auto        SkeletonRef = pXGPUGeom->getSkeletonRef();
+        if (not SkeletonRef.empty())
+        {
+            if (auto* pSkeleton = Mgr.getResource(SkeletonRef); pSkeleton)
+            {
+                nBones = pSkeleton->getBones().size();
+                Mgr.ReleaseRef(SkeletonRef);
+            }
+        }
+        if (const char* pErr = pXGPUGeom->ValidateBoneAddressing(nBones); pErr)
+        {
+            assert(false && "Corrupt xgeom_skin bone addressing");
+            xserializer::default_memory_handler_v.Free(xserializer::mem_type{ .m_bUnique = true }, pXGPUGeom);
+            return nullptr;
+        }
+    }
+    #endif
+
     // Create buffers
     xgpu::device::error* p;
 
@@ -63,6 +85,27 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
     ||(p = UserData.m_Device.Create(pXGPUGeom->ClusterBuffer(),      xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(xgeom_skin::geom::cluster_data),      .m_EntryCount = (int)pXGPUGeom->getClusterData().size(),  .m_pData = pXGPUGeom->getClusterData().data() }))
     ;
     assert(p == nullptr);
+
+    // The palettes, as 32 bit words (two uint16 entries each). A skin without palettes binds one shared dummy: the descriptor layout never changes
+    if (pXGPUGeom->m_nBoneMap)
+    {
+        std::vector<std::uint32_t> Words((pXGPUGeom->m_nBoneMap + 1) / 2, 0u);
+        std::memcpy(Words.data(), pXGPUGeom->m_pBoneMap, pXGPUGeom->m_nBoneMap * sizeof(std::uint16_t));
+        p = UserData.m_Device.Create(pXGPUGeom->BoneMapBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = (int)Words.size(), .m_pData = Words.data()});
+        assert(p == nullptr);
+    }
+    else
+    {
+        static xgpu::buffer s_DummyBoneMap = [&]
+        {
+            xgpu::buffer        B;
+            std::uint32_t       Zero = 0;
+            [[maybe_unused]] auto* e = UserData.m_Device.Create(B, xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = 1, .m_pData = &Zero});
+            assert(e == nullptr);
+            return B;
+        }();
+        pXGPUGeom->BoneMapBuffer() = s_DummyBoneMap;
+    }
 
     // Resolve the default material instances. A referenced material instance that fails to load
     // (missing/uncompiled itself, or a broken dependency of its own) is the same expected,
@@ -96,6 +139,7 @@ void xresource::loader< xrsc::geom_skin_type_guid_v >::Destroy(xresource::mgr& M
     UserData.m_Device.Destroy(std::move(Data.VertexExtrasBuffer()));
     UserData.m_Device.Destroy(std::move(Data.IndexBuffer()));
     UserData.m_Device.Destroy(std::move(Data.ClusterBuffer()));
+    UserData.m_Device.Destroy(std::move(Data.BoneMapBuffer()));     // the shared dummy survives: the device only frees a buffer's last reference
 
     // Release all the material instance references
     for (auto& E : Data.getDefaultMaterialInstances())

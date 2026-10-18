@@ -25,6 +25,7 @@
 #include <vector>
 #include <algorithm>
 #include <unordered_set>
+#include <limits>
 #include <iostream>
 
 namespace xgeom_skin_compiler
@@ -314,8 +315,6 @@ xerr ConvertToCompilerMesh(void)
                 // up - a raw bone whose weight got culled away never needs to resolve to anything.
                 {
                     const int nWeights = std::min<int>(RawVert.m_nWeights, 4);
-                    int32_t   MinBone  = std::numeric_limits<std::int32_t>::max();
-                    int32_t   MaxBone  = std::numeric_limits<std::int32_t>::min();
 
                     for (int j = 0; j < nWeights; ++j)
                     {
@@ -328,25 +327,10 @@ xerr ConvertToCompilerMesh(void)
 
                         CompilerVert.m_SkelBoneIndex[j] = It->second;
                         CompilerVert.m_Weight[j]        = RawVert.m_Weight[j].m_Weight;
-
-                        MinBone = std::min(MinBone, It->second);
-                        MaxBone = std::max(MaxBone, It->second);
                     }
 
-                    // Hard-error: no amount of cluster splitting can shrink a SINGLE vertex's own
-                    // bone span below the 7-bit per-vertex offset budget (127) - two of its own
-                    // influences already sit further apart than that in the skeleton's bone order.
-                    if (nWeights > 0 && (MaxBone - MinBone) > xgeom_skin::geom::vertex::max_bone_offset_v)
-                    {
-                        std::string Bones;
-                        for (int j = 0; j < nWeights; ++j)
-                        {
-                            const auto& RawName = m_RawGeom.m_Bone[RawVert.m_Weight[j].m_iBone].m_Name;
-                            Bones += std::format("{}{} (#{}, {:.3f})", j ? ", " : "", RawName, m_BoneNameToSkelIndex.find(RawName)->second, RawVert.m_Weight[j].m_Weight);
-                        }
-                        LogMessage(xresource_pipeline::msg_type::ERROR, std::format("The bones of a vertex of {} are {} apart in the skeleton: {}", Mesh.m_Name.data(), MaxBone - MinBone, Bones));
-                        return xerr::create_f<state, "A skin vertex's own bone weights span more skeleton bones than a single cluster can address - author-time skeleton bone order makes this vertex unrepresentable">();
-                    }
+                    // Wide bone spans are represented later by a cluster-local palette.
+
                 }
             }
 
@@ -473,6 +457,45 @@ xerr ConvertToCompilerMesh(void)
 
         //--------------------------------------------------------------------------------------
 
+        // The cluster's bone addressing (xgeom_skin.h cluster_data): base offset when its bones span at most 128 skeleton slots, otherwise a
+        // palette of at most 128 distinct bones, otherwise the cluster is split (documentation/Editors/skin_bone_palette_plan.md)
+        using bone_addressing = geom::bone_addressing;
+
+        struct cluster_bones
+        {
+            bone_addressing            m_Mode{ bone_addressing::BASE_OFFSET };
+            std::int32_t               m_BaseBone{ 0 };
+            std::vector<std::uint16_t> m_Palette;
+        };
+
+        struct bone_map_builder
+        {
+            std::vector<std::uint16_t>              m_Entries;
+            std::vector<std::vector<std::uint16_t>> m_UniquePalettes;
+            std::vector<std::uint32_t>               m_Starts;
+
+            std::uint32_t Intern(const std::vector<std::uint16_t>& Palette)
+            {
+                for (std::size_t i = 0; i < m_UniquePalettes.size(); ++i)
+                    if (m_UniquePalettes[i] == Palette) return m_Starts[i];
+                constexpr std::size_t max_payload_v = 0x3fffffffu;
+                if (m_Entries.size() > max_payload_v || Palette.size() > max_payload_v - m_Entries.size())
+                    throw std::runtime_error("The skin BoneMap exceeds the 30-bit cluster payload");
+                const auto Start = static_cast<std::uint32_t>(m_Entries.size());
+                m_Entries.insert(m_Entries.end(), Palette.begin(), Palette.end());
+                m_UniquePalettes.push_back(Palette);
+                m_Starts.push_back(Start);
+                return Start;
+            }
+        };
+
+        static std::uint32_t PackBoneAddressing(bone_addressing Mode, std::uint32_t Payload)
+        {
+            constexpr std::uint32_t payload_mask_v = 0x3fffffffu;
+            if (Payload > payload_mask_v) throw std::runtime_error("Bone-addressing payload overflow");
+            return geom::pos_translation_and_bones::Pack(Mode, Payload);
+        }
+
         // Tracks the [min,max] skeleton bone index touched by a candidate cluster - a cluster can
         // only be accepted (Part A) if this span fits within the 7-bit per-vertex offset budget
         // (127), since every vertex's bone offset is relative to one shared per-cluster base index.
@@ -496,6 +519,8 @@ xerr ConvertToCompilerMesh(void)
         , std::vector<geom::vertex_extras>& AllExtrasVerts
         , std::vector<geom::cluster_data>&  AllClusterData
         , std::vector<uint32_t>&            AllIndices
+        , bone_map_builder&                 BoneMap
+        , std::uint32_t                     nBones
         )
         {
             if (c.tri_ids.empty()) return;
@@ -514,18 +539,47 @@ xerr ConvertToCompilerMesh(void)
                 }
             }
 
+            std::vector<std::uint16_t> distinct_bones;
+            distinct_bones.reserve(c.tri_ids.size() * 12);
+            for (uint32_t ti : c.tri_ids)
+            {
+                for (int j = 0; j < 3; ++j)
+                {
+                    const auto& V = InputVerts[InputIndices[ti * 3 + j]];
+                    for (int w = 0; w < 4; ++w)
+                    {
+                        if (V.m_Weight[w] <= 0.0f || V.m_SkelBoneIndex[w] < 0) continue;
+                        const auto Bone = static_cast<std::uint32_t>(V.m_SkelBoneIndex[w]);
+                        if (Bone >= nBones) throw std::runtime_error("A skin influence references a bone outside the skeleton");
+                        distinct_bones.push_back(static_cast<std::uint16_t>(Bone));
+                    }
+                }
+            }
+            std::sort(distinct_bones.begin(), distinct_bones.end());
+            distinct_bones.erase(std::unique(distinct_bones.begin(), distinct_bones.end()), distinct_bones.end());
+
+            cluster_bones ClusterBones;
+            const bool base_offset_ok = bb_bone.empty() || (bb_bone.m_Max - bb_bone.m_Min) <= geom::vertex::max_bone_offset_v;
+            if (base_offset_ok)
+                ClusterBones.m_BaseBone = bb_bone.empty() ? 0 : bb_bone.m_Min;
+            else if (distinct_bones.size() <= 128)
+            {
+                ClusterBones.m_Mode = bone_addressing::PALETTE;
+                ClusterBones.m_Palette = distinct_bones;
+            }
+            const bool bones_addressable = base_offset_ok || distinct_bones.size() <= 128;
+
             xmath::fvec3    extent_pos      = bb_pos.m_MaxPos - bb_pos.m_MinPos;
             xmath::fvec2    extent_uv       = bb_uv.m_MaxUV - bb_uv.m_MinUV;
             float           max_e_uv        = std::max(extent_uv.m_X, extent_uv.m_Y);
             // Not the world size (as xgeom_static's SplitCluster): the positions are quantized relative to the cluster's own bounds, so a big
             // mesh is not cut into more clusters (draws) than a small one with the same vertices. The UVs: 16 bits over the cluster's UV span
             bool            small_extent    = (max_e_uv <= MaxUVExtent);
-            bool            bone_ok         = bb_bone.empty() || (bb_bone.m_Max - bb_bone.m_Min) <= geom::vertex::max_bone_offset_v;
             // One triangle whose UVs span more than a cluster's is a cluster anyway (its UVs lose precision): splitting it again would never end
             small_extent = small_extent || c.tri_ids.size() <= 1;
 
             std::unordered_set<uint32_t> used_verts;
-            if (small_extent && bone_ok)
+            if (small_extent && bones_addressable)
             {
                 for (uint32_t ti : c.tri_ids)
                 {
@@ -536,7 +590,7 @@ xerr ConvertToCompilerMesh(void)
                 }
             }
 
-            if (small_extent && bone_ok && used_verts.size() <= MaxVerts)
+            if (small_extent && bones_addressable && used_verts.size() <= MaxVerts)
             {
                 // Remap verts locally
                 std::vector<uint32_t> new_vert_ids(used_verts.begin(), used_verts.end());
@@ -590,9 +644,11 @@ xerr ConvertToCompilerMesh(void)
                 meshopt_optimizeVertexFetchRemap(fetch_remap.data(), local_indices.data(), local_indices.size(), static_cast<unsigned int>(new_vert_ids.size()));
 
                 // Every vertex offsets its bone indices from this SAME cluster-wide base - guaranteed
-                // to fit a uint16 (skeletons are nowhere near 65536 bones) and guaranteed by bone_ok
+                // to fit a uint16 (skeletons are nowhere near 65536 bones) and validated by the selected addressing mode
                 // above that every vertex's own offsets fit the 7-bit budget.
-                const std::int32_t BaseBoneIndex = bb_bone.empty() ? 0 : bb_bone.m_Min;
+                const std::int32_t BaseBoneIndex = ClusterBones.m_BaseBone;
+                const std::uint32_t PaletteStart = ClusterBones.m_Mode == bone_addressing::PALETTE
+                    ? BoneMap.Intern(ClusterBones.m_Palette) : 0u;
 
                 // Pack original compressed vertices (fused position+skin) and extras
                 std::vector<geom::vertex>           original_static(new_vert_ids.size());
@@ -608,7 +664,27 @@ xerr ConvertToCompilerMesh(void)
 
                     std::array<std::uint8_t,4> BoneOffset{ 0,0,0,0 };
                     for (int w = 0; w < 4; ++w)
-                        BoneOffset[w] = (v.m_SkelBoneIndex[w] < 0) ? 0 : static_cast<std::uint8_t>(v.m_SkelBoneIndex[w] - BaseBoneIndex);
+                    {
+                        if (v.m_Weight[w] <= 0.0f || v.m_SkelBoneIndex[w] < 0) continue;
+                        const auto Bone = static_cast<std::uint32_t>(v.m_SkelBoneIndex[w]);
+                        if (ClusterBones.m_Mode == bone_addressing::BASE_OFFSET)
+                        {
+                            if (Bone < static_cast<std::uint32_t>(BaseBoneIndex) || Bone >= nBones ||
+                                Bone - static_cast<std::uint32_t>(BaseBoneIndex) > geom::vertex::max_bone_offset_v)
+                                throw std::runtime_error("Invalid base-offset skin influence while packing a cluster");
+                            BoneOffset[w] = static_cast<std::uint8_t>(Bone - static_cast<std::uint32_t>(BaseBoneIndex));
+                        }
+                        else
+                        {
+                            const auto It = std::lower_bound(ClusterBones.m_Palette.begin(), ClusterBones.m_Palette.end(), static_cast<std::uint16_t>(Bone));
+                            if (It == ClusterBones.m_Palette.end() || *It != Bone)
+                                throw std::runtime_error("Skin influence is missing from its cluster palette");
+                            const auto Index = static_cast<std::size_t>(It - ClusterBones.m_Palette.begin());
+                            if (Index >= 128 || *It >= nBones)
+                                throw std::runtime_error("Invalid palette skin influence while packing a cluster");
+                            BoneOffset[w] = static_cast<std::uint8_t>(Index);
+                        }
+                    }
 
                     original_static[i] = geom::vertex::Pack
                     ( static_cast<int16_t>(std::round(pos.m_X))
@@ -670,6 +746,7 @@ xerr ConvertToCompilerMesh(void)
                 cd.m_PosTrasnlationAndWPADDING.m_X  = pos_center.m_X;
                 cd.m_PosTrasnlationAndWPADDING.m_Y  = pos_center.m_Y;
                 cd.m_PosTrasnlationAndWPADDING.m_Z  = pos_center.m_Z;
+                cd.m_PosTrasnlationAndWPADDING.SetBoneAddressing(PackBoneAddressing(ClusterBones.m_Mode, PaletteStart));
                 cd.m_UVScaleTranslation.m_X         = uv_scale.m_X;
                 cd.m_UVScaleTranslation.m_Y         = uv_scale.m_Y;
                 cd.m_UVScaleTranslation.m_Z         = uv_min.m_X;
@@ -684,23 +761,12 @@ xerr ConvertToCompilerMesh(void)
                 cl.m_nVertices                      = static_cast<uint32_t>(new_vert_ids.size());
                 OutputClusters.push_back(cl);
             }
-            else if (!bone_ok)
+            else if (!bones_addressable)
             {
-                // Bone span is the correctness-blocking constraint (a hard 7-bit-per-vertex budget,
-                // unlike position/UV extent which is just a quality target) - fix it first, ahead of
-                // the position/UV axis competition below. Route each triangle by whether its
-                // dominant (highest-weight, i.e. slot 0 - CleanWeights sorts descending) bone sits
-                // above or below the span's midpoint; this provably shrinks the span each split.
-                if (c.tri_ids.size() == 1)
-                {
-                    // A single triangle can't be split any further - if its own 3 vertices jointly
-                    // still exceed the budget, no cluster-splitting strategy can fix it. (Each
-                    // individual vertex was already checked in ConvertToCompilerMesh; this catches
-                    // the case where two of a triangle's DIFFERENT vertices, each fine on their own,
-                    // jointly span too far apart.)
-                    throw std::runtime_error("A triangle's vertices jointly span more skeleton bones than a single cluster can address - author-time skeleton bone order makes it unrepresentable");
-                }
-
+                // Too many distinct bones for a palette is the correctness-blocking constraint (unlike position/UV extent, a quality
+                // target) - fix it first. Route each triangle by whether its dominant (highest-weight, i.e. slot 0 - CleanWeights sorts
+                // descending) bone sits above or below the span's midpoint.
+                // More than 128 distinct bones: split. A triangle has at most 12 bones, so this always ends before a single triangle
                 const std::int32_t mid_bone = (bb_bone.m_Min + bb_bone.m_Max) / 2;
 
                 TriCluster c1, c2;
@@ -725,8 +791,8 @@ xerr ConvertToCompilerMesh(void)
                         (i < c.tri_ids.size() / 2 ? c1 : c2).tri_ids.push_back(c.tri_ids[i]);
                 }
 
-                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
-                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices, BoneMap, nBones);
+                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices, BoneMap, nBones);
             }
             else
             {
@@ -787,8 +853,8 @@ xerr ConvertToCompilerMesh(void)
                         (i < c.tri_ids.size() / 2 ? c1 : c2).tri_ids.push_back(c.tri_ids[i]);
                 }
 
-                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
-                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices);
+                RecurseClusterSplit(InputVerts, InputIndices, c1, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices, BoneMap, nBones);
+                RecurseClusterSplit(InputVerts, InputIndices, c2, MaxVerts, MaxUVExtent, BinormalSigns, OutputClusters, AllStaticVerts, AllExtrasVerts, AllClusterData, AllIndices, BoneMap, nBones);
             }
         }
 
@@ -796,6 +862,10 @@ xerr ConvertToCompilerMesh(void)
 
         void ConvertToGeom(float target_precision)
         {
+            const auto SkeletonBoneCount = m_Descriptor.m_ResolvedSkeletonBones.m_Bones.size();
+            if (SkeletonBoneCount > 65536u)
+                throw std::runtime_error("The referenced skeleton has more than 65,536 bones; uint16 BoneMap entries cannot represent it");
+
             const std::vector<mesh>&            compiler_meshes = m_CompilerMesh;
             geom&                               result          = m_FinalGeom;
             std::vector<geom::mesh>             OutMeshes;
@@ -806,6 +876,7 @@ xerr ConvertToCompilerMesh(void)
             std::vector<geom::vertex_extras>    OutAllExtrasVerts;
             std::vector<geom::cluster_data>     OutClusterData;
             std::vector<uint32_t>               OutAllIndices;
+            bone_map_builder                    OutBoneMap;
             BBox3                               OutGlobalBBox;
             std::uint16_t                       current_lod_idx         = 0;
             std::uint16_t                       current_submesh_idx     = 0;
@@ -851,7 +922,7 @@ xerr ConvertToCompilerMesh(void)
                     }
                 }
 
-                geom::mesh out_m;
+                geom::mesh out_m{};
                 xstrtool::Copy(out_m.m_Name, input_mesh.m_Name);
                 out_m.m_Name[31]        = '\0';
                 out_m.m_WorldPixelSize  = (num_edges > 0) ? total_edge_len / num_edges : 0.0f;
@@ -895,7 +966,7 @@ xerr ConvertToCompilerMesh(void)
                         for (uint32_t i = 0; i < num_tris; ++i) initial.tri_ids[i] = i;
 
                         size_t prev_num_clusters = OutClusters.size();
-                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices);
+                        RecurseClusterSplit(input_sm.m_Vertex, lod_indices, initial, 65534, max_uv_extent, binormal_signs, OutClusters, OutAllStaticVerts, OutAllExtrasVerts, OutClusterData, OutAllIndices, OutBoneMap, static_cast<std::uint32_t>(SkeletonBoneCount));
 
                         out_sm.m_nCluster    = static_cast<uint16_t>(OutClusters.size() - prev_num_clusters);
                         current_cluster_idx += out_sm.m_nCluster;
@@ -918,6 +989,12 @@ xerr ConvertToCompilerMesh(void)
             result.m_BBox         = OutGlobalBBox.to_fbbox();
             result.m_nVertices    = static_cast<std::uint32_t>(OutAllStaticVerts.size());
             result.m_nIndices     = static_cast<std::uint32_t>(OutAllIndices.size());
+            result.m_nBoneMap     = static_cast<std::uint32_t>(OutBoneMap.m_Entries.size());
+            result.m_pBoneMap     = result.m_nBoneMap ? new std::uint16_t[result.m_nBoneMap] : nullptr;
+            if (result.m_nBoneMap) std::ranges::copy(OutBoneMap.m_Entries, result.m_pBoneMap);
+            const auto nPaletteClusters = std::ranges::count_if(OutClusterData, [](const geom::cluster_data& CD) { return CD.m_PosTrasnlationAndWPADDING.getMode() == static_cast<std::uint32_t>(bone_addressing::PALETTE); });
+            LogMessage(xresource_pipeline::msg_type::INFO, std::format("Skin addressing: {} base-offset clusters, {} palette clusters, {} BoneMap entries, {} unique palettes"
+                , OutClusterData.size() - nPaletteClusters, nPaletteClusters, result.m_nBoneMap, OutBoneMap.m_UniquePalettes.size()));
             result.m_SkeletonRef  = m_Descriptor.m_SkeletonRef;    // required by Validate() - always set by the time compilation gets here
             result.m_AnimationRef = m_Descriptor.m_AnimationRef;   // the generated Anim Package: empty when the skin does not import them or the model has none
             LogMessage(xresource_pipeline::msg_type::INFO, std::format("SkeletonRef {:X} AnimationRef {:X}", result.m_SkeletonRef.m_Instance.m_Value, result.m_AnimationRef.m_Instance.m_Value));
@@ -967,7 +1044,7 @@ xerr ConvertToCompilerMesh(void)
             result.m_IndicesOffset          = current_offset; current_offset = align(current_offset + IndicesSize,      vulkan_align);
             result.m_ClusterDataOffset      = current_offset; current_offset = align(current_offset + ClusterDataSize,  vulkan_align);
             result.m_DataSize               = current_offset;
-            result.m_pData                  = new char[result.m_DataSize];
+            result.m_pData                  = new char[result.m_DataSize]{};     // zeroed: the alignment gaps between the sections are written too (the same input gives the same binary)
 
             // Copy data into m_pData
             std::memcpy(result.m_pData + result.m_VertexOffset,         OutAllStaticVerts.data(), VertexSize);
@@ -1591,6 +1668,179 @@ xerr ConvertToCompilerMesh(void)
     std::unique_ptr<instance> instance::Create(void)
     {
         return std::make_unique<implementation>();
+    }
+
+    //------------------------------------------------------------------------------------
+    // xgeom_skin_compiler.exe -SELFTEST: the bone addressing of documentation/Editors/skin_bone_palette_plan.md on synthetic meshes, through the
+    // compiler's own cluster split. Run by source/Editors/LevelEditor/smoke/test_imported_skeleton.py. Returns the number of failed checks.
+
+    int SelfTest(void)
+    {
+        using I    = implementation;
+        using geom = xgeom_skin::geom;
+        int nFailed = 0;
+        const auto Check = [&](bool b, const char* pWhat) { if (!b) { ++nFailed; std::printf("SELFTEST FAILED: %s\n", pWhat); } };
+
+        // One mesh: triangle t uses the bones Tris[t] (2 per vertex, 3 vertices); vertex v sits at x = v so its source is decoded back from its
+        // position. bFan: every triangle's first vertex is the same one (a source vertex in more than one cluster)
+        struct out
+        {
+            std::vector<geom::cluster>          m_Clusters;
+            std::vector<geom::vertex>           m_Verts;
+            std::vector<geom::vertex_extras>    m_Extras;
+            std::vector<geom::cluster_data>     m_Data;
+            std::vector<uint32_t>               m_Indices;
+            std::vector<std::array<int, 6>>     m_Source;       // the bones each source vertex was given
+        };
+        const auto Split = [&](const std::vector<std::array<int, 6>>& Tris, I::bone_map_builder& BoneMap, out& O, bool bFan = false)
+        {
+            std::vector<I::vertex>  Verts;
+            std::vector<uint32_t>   Indices;
+            I::TriCluster           C;
+            for (auto& T : Tris)
+            {
+                C.tri_ids.push_back(static_cast<uint32_t>(Indices.size() / 3));
+                for (int j = 0; j < 3; ++j)
+                {
+                    if (bFan && j == 0 && !Verts.empty()) { Indices.push_back(0); continue; }
+                    I::vertex V{};
+                    V.m_Position      = { static_cast<float>(O.m_Source.size()), static_cast<float>(j), 0.0f };
+                    V.m_Normal        = { 0, 0, 1 };
+                    V.m_Tangent       = { 1, 0, 0 };
+                    V.m_SkelBoneIndex = { T[j * 2], T[j * 2 + 1], -1, -1 };
+                    V.m_Weight        = { 0.6f, 0.4f, 0, 0 };
+                    Indices.push_back(static_cast<uint32_t>(Verts.size()));
+                    O.m_Source.push_back(T);        // (a fan's first vertex keeps the first triangle's bones: every triangle gives it the same)
+                    Verts.push_back(V);
+                }
+            }
+            const std::vector<float> Signs(Verts.size(), 1.0f);
+            I::RecurseClusterSplit(Verts, Indices, C, 65534, 1e9f, Signs, O.m_Clusters, O.m_Verts, O.m_Extras, O.m_Data, O.m_Indices, BoneMap, 65536);
+        };
+
+        // Every output vertex decodes (CPU mirror of the shaders) to the bones its source vertex was given
+        const auto Decodes = [&](const out& O, const I::bone_map_builder& BoneMap)
+        {
+            for (std::size_t c = 0; c < O.m_Clusters.size(); ++c)
+            {
+                const auto& CD = O.m_Data[c];
+                const auto& A  = CD.m_PosTrasnlationAndWPADDING;
+                for (std::uint32_t i = 0; i < O.m_Clusters[c].m_nVertices; ++i)
+                {
+                    const auto& V   = O.m_Verts[O.m_Clusters[c].m_iVertex + i];
+                    const float X   = ((V.m_XPos + 32768.0f) / 32767.5f - 1.0f) * CD.m_PosScaleAndBaseBoneIndex.m_X + A.m_X;
+                    const auto  Src = static_cast<std::size_t>(std::lround(X));
+                    if (Src >= O.m_Source.size()) return false;
+                    const int   j   = static_cast<int>(std::lround(((V.m_YPos + 32768.0f) / 32767.5f - 1.0f) * CD.m_PosScaleAndBaseBoneIndex.m_Y + A.m_Y));
+                    for (int k = 0; k < 2; ++k)
+                    {
+                        const std::uint32_t Index = V.getBoneOffset(k);
+                        const std::uint32_t Bone  = A.getMode() == static_cast<std::uint32_t>(geom::bone_addressing::PALETTE)
+                                                  ? (A.getPayload() + Index < BoneMap.m_Entries.size() ? BoneMap.m_Entries[A.getPayload() + Index] : ~0u)
+                                                  : static_cast<std::uint32_t>(CD.m_PosScaleAndBaseBoneIndex.m_W) + Index;
+                        if (Bone != static_cast<std::uint32_t>(O.m_Source[Src][j * 2 + k])) return false;
+                    }
+                }
+            }
+            return true;
+        };
+        const auto Mode = [](const out& O, std::size_t c) { return O.m_Data[c].m_PosTrasnlationAndWPADDING.getMode(); };
+        constexpr std::uint32_t base_v = 0, palette_v = 1;
+
+        // Boundaries of the span: 126 and 127 -> base offset; 128 -> palette (one cluster each)
+        for (int Span : { 126, 127, 128 })
+        {
+            I::bone_map_builder BoneMap; out O;
+            Split({ { 10, 11, 10 + Span, 12, 13, 14 } }, BoneMap, O);
+            Check(O.m_Clusters.size() == 1, "a span fits one cluster");
+            Check(Mode(O, 0) == (Span <= 127 ? base_v : palette_v), "span 126 and 127: base offset, 128: palette");
+            Check(Decodes(O, BoneMap), "the span boundaries decode to their bones");
+        }
+
+        // Distinct bones, spread 3 slots apart: 127 and 128 -> one palette, 129 -> split, each part addressable
+        for (int nBones : { 127, 128, 129 })
+        {
+            std::vector<std::array<int, 6>> Tris;
+            for (int b = 0; b < nBones; b += 3) Tris.push_back({ 3 * b, 3 * std::min(b + 1, nBones - 1), 3 * std::min(b + 2, nBones - 1), 3 * b, 3 * b, 3 * b });
+            I::bone_map_builder BoneMap; out O;
+            Split(Tris, BoneMap, O);
+            Check(nBones <= 128 ? (O.m_Clusters.size() == 1 && Mode(O, 0) == palette_v && BoneMap.m_Entries.size() == std::size_t(nBones)) : O.m_Clusters.size() >= 2
+                 , "127 and 128 distinct bones: one palette, 129: a split");
+            Check(Decodes(O, BoneMap), "the distinct-bone boundaries decode to their bones");
+        }
+
+        // Mixed geometry: a base-offset cluster and palettes of 4, 15 and 4 (the same bones again) bones; the palettes start at 0 and 4 and the
+        // identical one shares its start
+        {
+            I::bone_map_builder BoneMap; out O;
+            Split({ { 0, 1, 2, 3, 4, 5 } }, BoneMap, O);
+            Split({ { 0, 200, 400, 600, 0, 0 } }, BoneMap, O);
+            std::array<int, 6> A{ 1, 150, 300, 450, 600, 750 }, B{ 1, 160, 320, 480, 640, 800 }, C{ 1, 170, 340, 510, 680, 1 };
+            Split({ A, B, C }, BoneMap, O);
+            Split({ { 0, 200, 400, 600, 0, 0 } }, BoneMap, O);
+            Check(O.m_Clusters.size() == 4 && Mode(O, 0) == base_v && Mode(O, 1) == palette_v && Mode(O, 2) == palette_v && Mode(O, 3) == palette_v, "mixed modes");
+            Check(O.m_Data[1].m_PosTrasnlationAndWPADDING.getPayload() == 0 && O.m_Data[2].m_PosTrasnlationAndWPADDING.getPayload() == 4, "the palettes start at 0 and 4");
+            Check(O.m_Data[3].m_PosTrasnlationAndWPADDING.getPayload() == 0 && BoneMap.m_Entries.size() == 4 + 15, "an identical palette shares its start");
+            Check(Decodes(O, BoneMap), "a mixed geometry decodes to its bones");
+        }
+
+        // Ownership: a fan whose center (bones 50, 51) is in a base-offset cluster (bones 0..80) and a palette cluster (bones 5000
+        // and up, far from the center's); each cluster has its own copy of the center, and every vertex decodes to its own bones in its own cluster's mode
+        {
+            std::vector<std::array<int, 6>> Tris;
+            for (int k = 0; k < 30; ++k) Tris.push_back({ 50, 51, k, k + 1, k + 2, k + 3 });
+            for (int k = 0; k < 30; ++k) Tris.push_back({ 50, 51, 5000 + 5 * k, 5001 + 5 * k, 5002 + 5 * k, 5003 + 5 * k });
+            I::bone_map_builder BoneMap; out O;
+            Split(Tris, BoneMap, O, true);
+            bool bBase = false, bPalette = false;
+            for (std::size_t c = 0; c < O.m_Clusters.size(); ++c) (Mode(O, c) == base_v ? bBase : bPalette) = true;
+            Check(bBase && bPalette, "the fan splits into a base-offset and a palette cluster");
+            Check(O.m_Verts.size() > 1 + 2 * 60, "the fan's center is written once per cluster");
+            Check(Decodes(O, BoneMap), "every cluster's vertices decode to their own bones");
+        }
+
+        // The packed field: mode and payload round trip, the largest start included
+        for (std::uint32_t Payload : { 0u, 1u, 2u, 127u, 128u, 65535u, geom::pos_translation_and_bones::payload_mask_v })
+            for (auto M : { geom::bone_addressing::BASE_OFFSET, geom::bone_addressing::PALETTE })
+            {
+                geom::pos_translation_and_bones T{};
+                T.SetBoneAddressing(geom::pos_translation_and_bones::Pack(M, Payload));
+                Check(T.getMode() == static_cast<std::uint32_t>(M) && T.getPayload() == Payload, "the bone addressing round trips");
+            }
+
+        // Corrupt resources: the loader's validation rejects each
+        {
+            std::array<geom::vertex, 1>         Verts   { geom::vertex::Pack(0, 0, 0, { 3, 0, 0, 0 }, { 1, 0, 0, 0 }) };
+            std::array<geom::cluster_data, 1>   Data    {};
+            std::array<geom::cluster, 1>        Cluster { geom::cluster{ .m_iIndex = 0, .m_nIndices = 0, .m_iVertex = 0, .m_nVertices = 1 } };
+            std::array<std::uint16_t, 8>        Map     { 1, 2, 3, 4, 5, 6, 7, 8 };
+            std::vector<char>                   Blob(sizeof(Verts) + sizeof(Data));
+            const auto Validate = [&](std::uint32_t Addressing, float Base, std::uint32_t nMap, std::uint16_t Entry0, std::size_t nBones)
+            {
+                Data[0].m_PosScaleAndBaseBoneIndex.m_W = Base;
+                Data[0].m_PosTrasnlationAndWPADDING.SetBoneAddressing(Addressing);
+                Map[0] = Entry0;
+                std::memcpy(Blob.data(), Verts.data(), sizeof(Verts));
+                std::memcpy(Blob.data() + sizeof(Verts), Data.data(), sizeof(Data));
+                geom G{};
+                G.m_pData = Blob.data(); G.m_VertexOffset = 0; G.m_ClusterDataOffset = sizeof(Verts); G.m_nVertices = 1;
+                G.m_pCluster = Cluster.data(); G.m_nClusters = 1; G.m_pBoneMap = Map.data(); G.m_nBoneMap = nMap;
+                return G.ValidateBoneAddressing(nBones) == nullptr;
+            };
+            using P = geom::pos_translation_and_bones;
+            Check( Validate(P::Pack(geom::bone_addressing::PALETTE, 4), 0, 8, 1, 100),       "a valid palette cluster");
+            Check( Validate(P::Pack(geom::bone_addressing::BASE_OFFSET, 0), 10, 0, 1, 100),  "a valid base-offset cluster");
+            Check(!Validate(P::Pack(geom::bone_addressing::PALETTE, 8), 0, 8, 1, 100),       "a palette start outside the BoneMap");
+            Check(!Validate(P::Pack(geom::bone_addressing::PALETTE, 5), 0, 8, 1, 100),       "an index outside the BoneMap");
+            Check(!Validate(P::Pack(geom::bone_addressing::PALETTE, 0), 0, 8, 100, 100),     "a BoneMap entry outside the skeleton");
+            Check(!Validate(2u << 30, 0, 8, 1, 100),                                          "a reserved mode");
+            Check(!Validate(3u << 30, 0, 8, 1, 100),                                          "the other reserved mode");
+            Check(!Validate(P::Pack(geom::bone_addressing::PALETTE, 0), 0, 0, 1, 100),       "a palette cluster with an empty BoneMap");
+            Check(!Validate(P::Pack(geom::bone_addressing::BASE_OFFSET, 0), 97, 0, 1, 100),  "a base-offset bone outside the skeleton");
+        }
+
+        std::printf(nFailed ? "SELFTEST: %d failed\n" : "SELFTEST: OK\n", nFailed);
+        return nFailed;
     }
 }
 

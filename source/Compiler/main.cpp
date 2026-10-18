@@ -11,6 +11,8 @@ int main( int argc, const char* argv[] )
     //
     xscheduler::g_System.Init();
 
+    if (argc == 2 && std::string_view(argv[1]) == "-SELFTEST") return xgeom_skin_compiler::SelfTest();
+
     //
    // Create the compiler instance
    //

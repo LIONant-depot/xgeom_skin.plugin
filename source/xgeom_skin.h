@@ -20,7 +20,8 @@ namespace xgeom_skin
         // carries it through to the compiled side the same way m_pDefaultMaterialInstances already
         // does for material refs.
         // v3: added m_AnimationRef - the Anim Package of the skin's own animations (empty when the model has none or the skin does not import them)
-        inline static constexpr auto xserializer_version_v = 3;
+        // v4: bone palettes - cluster_data's second vec4 W is the cluster's bone addressing (an integer), m_pBoneMap holds the palettes
+        inline static constexpr auto xserializer_version_v = 4;
         struct mesh
         {
             std::array<char, 32>    m_Name;
@@ -64,12 +65,33 @@ namespace xgeom_skin
         // base skeleton bone index. A vertex's real bone index for influence i is
         // m_BaseBoneIndex + vertex::getBoneOffset(i). Stored as a plain float: bone counts never get
         // anywhere near 2^24, so the round trip through float is exact, and it costs zero extra bytes.
+        // How a cluster's vertices name their bones (documentation/Editors/skin_bone_palette_plan.md):
+        //   BASE_OFFSET: bone = m_PosScaleAndBaseBoneIndex.m_W + the vertex's 7 bit index (the cluster's bones span at most 128 slots)
+        //   PALETTE:     bone = m_pBoneMap[PaletteStart + the vertex's 7 bit index]
+        // m_BoneAddressing: bits 31..30 the mode (2 and 3 reserved, rejected by the loader), bits 29..0 the payload (PALETTE: its start in
+        // m_pBoneMap; BASE_OFFSET: 0). A real integer, never handled as a float; GetBoneAddressing/SetBoneAddressing are the only access.
+        enum class bone_addressing : std::uint32_t { BASE_OFFSET = 0, PALETTE = 1 };
+        struct pos_translation_and_bones
+        {
+            float                   m_X, m_Y, m_Z;              // the cluster's position translation
+            std::uint32_t           m_BoneAddressing;
+
+            static constexpr std::uint32_t  payload_mask_v  = 0x3fffffffu;
+            static constexpr int            mode_shift_v    = 30;
+            constexpr std::uint32_t         GetBoneAddressing   (void)              const   noexcept { return m_BoneAddressing; }
+            constexpr void                  SetBoneAddressing   (std::uint32_t V)           noexcept { m_BoneAddressing = V; }
+            constexpr std::uint32_t         getMode             (void)              const   noexcept { return m_BoneAddressing >> mode_shift_v; }
+            constexpr std::uint32_t         getPayload          (void)              const   noexcept { return m_BoneAddressing & payload_mask_v; }
+            static constexpr std::uint32_t  Pack                (bone_addressing Mode, std::uint32_t Payload) noexcept { return (static_cast<std::uint32_t>(Mode) << mode_shift_v) | (Payload & payload_mask_v); }
+        };
+
         struct cluster_data
         {
-            vec4                    m_PosScaleAndBaseBoneIndex;   // XYZ = position scale for the cluster, W = base skeleton bone index
-            vec4                    m_PosTrasnlationAndWPADDING;  // XYZ = position translation for the cluster, W = unused (mirrors xgeom_static)
-            vec4                    m_UVScaleTranslation;         // UV Translation.
+            vec4                        m_PosScaleAndBaseBoneIndex;   // XYZ = position scale for the cluster, W = base skeleton bone index (BASE_OFFSET)
+            pos_translation_and_bones   m_PosTrasnlationAndWPADDING;  // XYZ = position translation for the cluster, W = the bone addressing (above)
+            vec4                        m_UVScaleTranslation;         // UV Translation.
         };
+        static_assert(sizeof(cluster_data) == 48);
 
         struct cluster
         {
@@ -91,7 +113,7 @@ namespace xgeom_skin
             std::array<std::uint8_t,6>  m_Packed;                 // see bit layout below
 
             // m_Packed's 48 bits, LSB-first (bit 0 = lowest bit of m_Packed[0]):
-            //   bits  0- 6  BoneOffset[0]  (7 bits, cluster-local: real index = cluster.m_BaseBoneIndex + this)
+            //   bits  0- 6  BoneOffset[0]  (7 bits, cluster-local: base bone + this, or this cluster's palette entry - see cluster_data)
             //   bits  7-13  BoneOffset[1]  (7 bits)
             //   bits 14-20  BoneOffset[2]  (7 bits)
             //   bits 21-27  BoneOffset[3]  (7 bits)
@@ -178,7 +200,7 @@ namespace xgeom_skin
         };
         static_assert(sizeof(vertex_extras) == 12);
 
-        using runtime_allocation = std::array<std::size_t, 4*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
+        using runtime_allocation = std::array<std::size_t, 5*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
 
         //-------------------------------------------------------------------------
 
@@ -199,6 +221,20 @@ namespace xgeom_skin
         inline std::span<xrsc::material_instance_ref>   getDefaultMaterialInstances (void)                              const   noexcept { return { m_pDefaultMaterialInstances, m_nDefaultMaterialInstances }; }
         inline xrsc::skeleton                           getSkeletonRef              (void)                              const   noexcept { return m_SkeletonRef; }
         inline xrsc::anim_package                       getAnimationRef             (void)                              const   noexcept { return m_AnimationRef; }
+        inline std::span<std::uint16_t>                 getBoneMap                  (void)                              const   noexcept { return { m_pBoneMap, m_nBoneMap }; }
+
+        // The skeleton bone of a vertex's influence i (the CPU mirror of the shaders' decode)
+        inline std::uint32_t getVertexBone(std::size_t iCluster, const vertex& V, int i) const noexcept
+        {
+            const auto& CD = getClusterData()[iCluster];
+            const auto& A  = CD.m_PosTrasnlationAndWPADDING;
+            return A.getMode() == static_cast<std::uint32_t>(bone_addressing::PALETTE) ? m_pBoneMap[A.getPayload() + V.getBoneOffset(i)]
+                                                                                       : static_cast<std::uint32_t>(CD.m_PosScaleAndBaseBoneIndex.m_W) + V.getBoneOffset(i);
+        }
+
+        // Every cluster's addressing is a known mode, names bones inside the skeleton (nBones, 0 = not known) and stays inside the BoneMap.
+        // The resource loader runs it in Debug before the upload; the tests run it on corrupt resources. Null when valid, else what is wrong
+        inline const char*                              ValidateBoneAddressing      (std::size_t nBones)                const   noexcept;
 
         xmath::fbbox                    m_BBox;
         char*                           m_pData;  // Contiguous buffer for GPU data ( vertices, extras, indices)
@@ -207,6 +243,7 @@ namespace xgeom_skin
         submesh*                        m_pSubMesh;
         cluster*                        m_pCluster;
         xrsc::material_instance_ref*    m_pDefaultMaterialInstances;
+        std::uint16_t*                  m_pBoneMap;      // the palettes of the PALETTE clusters (skeleton bone indices); empty when every cluster uses BASE_OFFSET
         xrsc::skeleton                  m_SkeletonRef;   // the skeleton this geometry is skinned to - always set (descriptor requires one)
         xrsc::anim_package              m_AnimationRef;  // its generated animations: empty when the skin does not import them or the model has none
         runtime_allocation              m_RunTimeSpace;
@@ -222,6 +259,7 @@ namespace xgeom_skin
         std::uint32_t                   m_nIndices;
         std::uint32_t                   m_nVertices;
         std::uint16_t                   m_nDefaultMaterialInstances;
+        std::uint32_t                   m_nBoneMap;
     };
 
     //-------------------------------------------------------------------------
@@ -246,9 +284,50 @@ namespace xgeom_skin
         if (m_pSubMesh)                     delete[] m_pSubMesh;
         if (m_pCluster)                     delete[] m_pCluster;
         if (m_pDefaultMaterialInstances)    delete[] m_pDefaultMaterialInstances;
+        if (m_pBoneMap)                     delete[] m_pBoneMap;
         if (m_pData)                        delete[] m_pData;
 
         Initialize();
+    }
+
+    //-------------------------------------------------------------------------
+
+    const char* geom::ValidateBoneAddressing(std::size_t nBones) const noexcept
+    {
+        if (nBones) for (auto E : getBoneMap()) if (E >= nBones) return "A BoneMap entry is outside the skeleton";
+
+        const auto Vertices = getVertices();
+        const auto CDs      = getClusterData();
+        for (std::size_t c = 0; c < m_nClusters; ++c)
+        {
+            const auto& A       = CDs[c].m_PosTrasnlationAndWPADDING;
+            const auto  Payload = A.getPayload();
+            const float Base    = CDs[c].m_PosScaleAndBaseBoneIndex.m_W;
+            const bool  bPalette = A.getMode() == static_cast<std::uint32_t>(bone_addressing::PALETTE);
+            if (bPalette)
+            {
+                if (m_nBoneMap == 0)        return "A palette cluster in a geometry with no BoneMap";
+                if (Payload >= m_nBoneMap)  return "A palette starts outside the BoneMap";
+            }
+            else if (A.getMode() == static_cast<std::uint32_t>(bone_addressing::BASE_OFFSET))
+            {
+                if (Payload != 0)           return "A base-offset cluster has a payload";
+                if (!(Base >= 0.0f))        return "A cluster's base bone is negative";
+            }
+            else                            return "A cluster uses a reserved bone addressing mode";
+
+            // ponytail: a palette's own size is not stored, so a vertex index is checked against the end of the BoneMap, not of its palette
+            const auto& C = m_pCluster[c];
+            if (std::size_t(C.m_iVertex) + C.m_nVertices > Vertices.size()) return "A cluster's vertices are outside the geometry";
+            for (auto& V : Vertices.subspan(C.m_iVertex, C.m_nVertices))
+                for (int i = 0; i < 4; ++i)
+                {
+                    const std::size_t Index = V.getBoneOffset(i);
+                    if (bPalette ? (Payload + Index >= m_nBoneMap) : (nBones && static_cast<std::size_t>(Base) + Index >= nBones))
+                        return "A vertex names a bone outside its palette or the skeleton";
+                }
+        }
+        return nullptr;
     }
 
     //-------------------------------------------------------------------------
@@ -388,6 +467,8 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_pDefaultMaterialInstances,    Geom.m_nDefaultMaterialInstances))
             || (Err = Stream.Serialize(Geom.m_SkeletonRef))
             || (Err = Stream.Serialize(Geom.m_AnimationRef))
+            || (Err = Stream.Serialize(Geom.m_nBoneMap))
+            || (Err = Stream.Serialize(Geom.m_pBoneMap,                     Geom.m_nBoneMap))
             || (Err = Stream.Serialize(Geom.m_DataSize))
             || (Err = Stream.Serialize(Geom.m_pData,                        Geom.m_DataSize))
             || (Err = Stream.Serialize(Geom.m_RunTimeSpace))
