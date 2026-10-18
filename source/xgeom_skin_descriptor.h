@@ -30,29 +30,6 @@ namespace xgeom_skin
     };
     XPROPERTY_REG(lod)
 
-    struct pre_transform
-    {
-        xmath::fvec3        m_Scale         = xmath::fvec3::fromOne();
-        xmath::fvec3        m_Rotation      = xmath::fvec3::fromZero();
-        xmath::fvec3        m_Translation   = xmath::fvec3::fromZero();
-        bool                m_EditorLockScale = false;      // editor only: the Scale lock toggle (editing one axis scales all three)
-        bool                m_bAutoUnits    = false;        // the units of the source to meters, before Scale: on for a new descriptor (SetupNew), off for one from before it (its Scale is the user's)
-
-        XPROPERTY_DEF
-        ( "preTransform", pre_transform
-        , obj_member<"AutoUnits",   &pre_transform::m_bAutoUnits, member_help<"Scale the source to meters (the engine's unit) before the Scale below: by the units the file says (FBX UnitScaleFactor; glTF is in meters), or for a file without units (OBJ) a guess from its size (a model too large for meters is in cm). The compile log says what it detected and applied. Off: the Scale alone">>
-        , obj_scope<"Scale", xproperty::settings::vector3_group
-            , obj_member<"X", &xmath::LockedScaleAxis<pre_transform, &pre_transform::m_Scale, &pre_transform::m_EditorLockScale, 0>>
-            , obj_member<"Y", &xmath::LockedScaleAxis<pre_transform, &pre_transform::m_Scale, &pre_transform::m_EditorLockScale, 1>>
-            , obj_member<"Z", &xmath::LockedScaleAxis<pre_transform, &pre_transform::m_Scale, &pre_transform::m_EditorLockScale, 2>>
-            >
-        , obj_member<"EditorLockScale", &pre_transform::m_EditorLockScale, member_flags<flags::DONT_SHOW>>
-        , obj_member<"Rotation",    &pre_transform::m_Rotation >
-        , obj_member<"Translation", &pre_transform::m_Translation >
-        )
-    };
-    XPROPERTY_REG(pre_transform)
-
     struct mesh_details
     {
         std::string                 m_Name = {};
@@ -187,11 +164,6 @@ namespace xgeom_skin
 
         void SetupFromSource(std::string_view FileName) override
         {
-        }
-
-        void SetupNew() noexcept override
-        {
-            m_PreTranslation.m_bAutoUnits = true;
         }
 
         void Validate(std::vector<std::string>& Errors) const noexcept override
@@ -626,7 +598,6 @@ namespace xgeom_skin
         }
 
         std::wstring                                m_ImportAsset           = {};
-        pre_transform                               m_PreTranslation        = {};
         bool                                        m_bMergeAllMeshes       = true;
         mesh_details                                m_AllMeshesDetails      = {};
         std::vector<material_details>               m_MaterialDetailsList   = {};
@@ -659,7 +630,6 @@ namespace xgeom_skin
                 return Flags;
             }
             >>
-            , obj_member<"PreTranslation",      &descriptor::m_PreTranslation >
             , obj_member<"bMergeAllMeshes",     &descriptor::m_bMergeAllMeshes >
             , obj_member<"AllMeshesDetails",    &descriptor::m_AllMeshesDetails, member_ui_open<true>, member_dynamic_flags < +[](const descriptor& O)
             {

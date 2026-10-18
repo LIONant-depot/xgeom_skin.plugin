@@ -165,7 +165,6 @@ namespace xgeom_skin_editor::preview
         std::uint64_t                           m_EnvInstance        = 0;
 
         std::vector<xmath::fmat4>                   m_SkinMatrices;
-        xmath::fmat4                                m_PendingL2W = xmath::fmat4::fromIdentity();   // the editor: the mesh at the Scale/Translation being edited, before it is compiled (xeditor_scale_reference.h)
 
         template<std::size_t N>
         static xgpu::shader::setup ShaderSetup(xgpu::shader::type::bit Type, const std::uint32_t (&Code)[N]) noexcept
@@ -365,7 +364,7 @@ namespace xgeom_skin_editor::preview
                 for (auto& S : Geom.getSubmeshes().subspan(L.m_iSubmesh, L.m_nSubmesh))
                 {
                     CmdBuffer.setPipelineInstance(m_ShadowInstance, StaticSSBO);
-                    m_ShadowUBO.allocEntry<ubo_shadow_generation_mesh>().m_L2C = m_ShadowL2C * m_PendingL2W;
+                    m_ShadowUBO.allocEntry<ubo_shadow_generation_mesh>().m_L2C = m_ShadowL2C;
                     CmdBuffer.setDynamicUBO(m_ShadowUBO, 0);
 
                     geom_skin_push_const PushConst{ .m_ClusterIndex = S.m_iCluster, .m_MaxInfluences = MaxInfluences };
@@ -403,7 +402,7 @@ namespace xgeom_skin_editor::preview
             // sized to the geometry), with a soft fill
             const float Radius = Geom.m_BBox.getRadius();
             xlionrender::scene Scene;
-            if (Geom.m_nVertices) Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_L2W = m_PendingL2W, .m_Materials = m_Materials });
+            if (Geom.m_nVertices) Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_L2W = xmath::fmat4::fromIdentity(), .m_Materials = m_Materials });
             Scene.m_Sun     = { .m_Direction = m_Center - m_LightView.getPosition(), .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
@@ -460,7 +459,7 @@ namespace xgeom_skin_editor::preview
                 ForEachCluster(Geom, Settings, CmdBuffer, [&]
                 {
                     auto& UBO = m_WireUBO.allocEntry<ubo_wireframe_mesh>();
-                    UBO.m_L2w = L2w * m_PendingL2W;
+                    UBO.m_L2w = L2w;
                     UBO.m_w2C = w2C;
                     CmdBuffer.setDynamicUBO(m_WireUBO, 0);
                 });
@@ -468,7 +467,6 @@ namespace xgeom_skin_editor::preview
 
             // The grid sits at the bottom of the geometry
             xmath::fvec3 BoxMin = Geom.m_BBox.m_Min, BoxMax = Geom.m_BBox.m_Max;
-            xeditor::scale_reference::TransformBox(m_PendingL2W, BoxMin, BoxMax);     // the mesh as drawn (the Scale being edited)
             xeditor_tools::grid::Draw(CmdBuffer, m_View.getW2C(), m_View.getPosition(), m_ShadowL2C, Settings.m_bGridToYMin ? BoxMin.m_Y : 0.0f);
 
             if (Geom.m_nVertices)
@@ -484,7 +482,7 @@ namespace xgeom_skin_editor::preview
                     ForEachCluster(Geom, Settings, CmdBuffer, [&]
                     {
                         auto& UBO = m_NormalUBO.allocEntry<ubo_debug_normal_mesh>();
-                        UBO.m_L2C         = w2C * L2w * m_PendingL2W;
+                        UBO.m_L2C         = w2C * L2w;
                         UBO.m_ScaleFactor = Axis[i];
                         UBO.m_ScaleFactor.m_W = Geom.m_BBox.getRadius();
                         UBO.m_Color       = Colors[i];
