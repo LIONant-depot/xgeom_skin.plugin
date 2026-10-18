@@ -1607,8 +1607,17 @@ xerr ConvertToCompilerMesh(void)
                     return xerr::create_f<state, "Failed while opening the details.txt so it can't be saved">(Err);
 
                 xproperty::settings::context C{};
-                if ( auto Err = xproperty::sprop::serializer::Stream( File, m_Details, C); Err )
+                // A tree too deep for xproperty's paths is saved apart, in its own table after the properties
+                m_Details.m_bCompactTree = xgeom_skin::details::Depth(m_Details.m_RootNode) > xgeom_skin::details::compact_depth_v;
+                xgeom_skin::details::node Tree;
+                if (m_Details.m_bCompactTree) std::swap(Tree, m_Details.m_RootNode);
+                auto Err = xproperty::sprop::serializer::Stream( File, m_Details, C);
+                if (m_Details.m_bCompactTree) std::swap(Tree, m_Details.m_RootNode);
+                if ( Err )
                     return xerr::create_f<state, "Failed while serializing details.txt">(Err);
+                if ( m_Details.m_bCompactTree )
+                    if ( auto Err2 = m_Details.StreamCompactTree(File, m_Details.m_RootNode); Err2 )
+                        return xerr::create_f<state, "Failed while serializing the node tree of details.txt">(Err2);
             }
 
             //

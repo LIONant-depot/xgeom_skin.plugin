@@ -349,6 +349,7 @@ namespace xgeom_skin_editor
             m_Details = {};
             xproperty::settings::context Context;
             if (auto Err = xproperty::sprop::serializer::Stream(File, m_Details, Context); Err) { m_Details = {}; return; }
+            if (m_Details.m_bCompactTree && m_Details.StreamCompactTree(File, m_Details.m_RootNode)) { m_Details = {}; return; }
 
             const auto Before = m_Document.Snapshot();
             for (auto& Message : static_cast<xgeom_skin::descriptor&>(*m_Document.m_pDescriptor).MergeWithDetails(m_Details, m_Document.m_Guid.m_Instance))
