@@ -173,8 +173,14 @@ namespace xgeom_skin
                 V.m_XPos = X; V.m_YPos = Y; V.m_ZPos = Z;
 
                 const std::uint32_t Q0 = static_cast<std::uint32_t>(std::clamp((Weight[0] - weight0_low_v) / weight0_range_v, 0.0f, 1.0f) * ((1 << weight0_bits_v) - 1) + 0.5f);
-                const std::uint32_t Q1 = static_cast<std::uint32_t>(std::clamp( Weight[1] / weight1_range_v,                 0.0f, 1.0f) * ((1 << weight1_bits_v) - 1) + 0.5f);
-                const std::uint32_t Q2 = static_cast<std::uint32_t>(std::clamp( Weight[2] / weight2_range_v,                 0.0f, 1.0f) * ((1 << weight2_bits_v) - 1) + 0.5f);
+                std::uint32_t       Q1 = static_cast<std::uint32_t>(std::clamp( Weight[1] / weight1_range_v,                 0.0f, 1.0f) * ((1 << weight1_bits_v) - 1) + 0.5f);
+                std::uint32_t       Q2 = static_cast<std::uint32_t>(std::clamp( Weight[2] / weight2_range_v,                 0.0f, 1.0f) * ((1 << weight2_bits_v) - 1) + 0.5f);
+
+                // Rounded to the nearest step, the three stored weights can sum past 1 (up to ~0.9%): Weight3 then clamps at 0 and the skin
+                // matrix is scaled by that sum, moving the vertex away from the origin (a sawtooth on the silhouette, even in the bind pose)
+                const auto Sum = [&] { return weight0_low_v + Q0 / float((1 << weight0_bits_v) - 1) * weight0_range_v + Q1 / float((1 << weight1_bits_v) - 1) * weight1_range_v + Q2 / float((1 << weight2_bits_v) - 1) * weight2_range_v; };
+                while (Sum() > 1.0f && Q2) --Q2;
+                while (Sum() > 1.0f && Q1) --Q1;
 
                 std::uint64_t Raw = 0;
                 for (int i = 0; i < 4; ++i) Raw |= (std::uint64_t(BoneOffset[i]) & max_bone_offset_v) << (i * bone_offset_bits_v);

@@ -1848,6 +1848,19 @@ xerr ConvertToCompilerMesh(void)
             Check(!Validate(P::Pack(geom::bone_addressing::BASE_OFFSET, 0), 97, 0, 1, 100),  "a base-offset bone outside the skeleton");
         }
 
+        // The stored weights never sum past 1 (the skin matrix would scale the vertex away from the origin)
+        {
+            bool bOk = true;
+            for (int a = 0; a <= 100 && bOk; ++a)
+                for (int b = 0; b <= a && bOk; ++b)
+                {
+                    const float W0 = 0.25f + 0.75f * a / 100.0f, W1 = std::min(1.0f - W0, std::min(W0, 0.5f) * b / 100.0f), W2 = std::min(1.0f - W0 - W1, std::min(W1, 1.0f / 3.0f));
+                    const auto  D  = geom::vertex::Pack(0, 0, 0, { 0, 1, 2, 3 }, { W0, W1, W2, 1.0f - W0 - W1 - W2 }).getWeights();
+                    bOk = D[0] + D[1] + D[2] <= 1.0f + 1e-6f;
+                }
+            Check(bOk, "packed weights sum to at most 1");
+        }
+
         std::printf(nFailed ? "SELFTEST: %d failed\n" : "SELFTEST: OK\n", nFailed);
         return nFailed;
     }
