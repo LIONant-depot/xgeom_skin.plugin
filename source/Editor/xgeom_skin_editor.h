@@ -448,7 +448,9 @@ namespace xgeom_skin_editor
 
             m_Preview.UpdateView(Min, Avail.x, Avail.y);
             EvaluatePose(*pSkeleton);
-            m_Preview.UploadBones(*pSkeleton, m_PoseWorlds, m_Settings.m_PoseType);
+            // Animation Pose with no clip to play shows the bind pose (as Blender): the rest pose is authored apart and can disagree with the bind
+            const auto Pose = (m_Settings.m_PoseType == preview::pose_type::ANIMATION_POSE && !UsableAnim(*pSkeleton)) ? preview::pose_type::BIND_POSE : m_Settings.m_PoseType;
+            m_Preview.UploadBones(*pSkeleton, m_PoseWorlds, Pose);
             m_Preview.RenderShadow(*pWindow, *pGeom, m_Settings);
 
             // Drawn by xLIONRender into the preview's own view, then blitted as is into the panel (ImGui::Image would gamma encode the
