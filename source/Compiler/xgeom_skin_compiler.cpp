@@ -318,8 +318,12 @@ xerr ConvertToCompilerMesh(void)
 
                     for (int j = 0; j < nWeights; ++j)
                     {
-                        const auto& RawName = m_RawGeom.m_Bone[RawVert.m_Weight[j].m_iBone].m_Name;
-                        const auto  It       = m_BoneNameToSkelIndex.find(RawName);
+                        // A node the skeleton folded (a mesh's own node, which its unweighted vertices follow): its nearest kept ancestor
+                        auto It = m_BoneNameToSkelIndex.end();
+                        for (int b = RawVert.m_Weight[j].m_iBone; b >= 0 && It == m_BoneNameToSkelIndex.end(); b = m_RawGeom.m_Bone[b].m_iParent)
+                            It = m_BoneNameToSkelIndex.find(m_RawGeom.m_Bone[b].m_Name);
+                        if (It == m_BoneNameToSkelIndex.end() && !m_BoneNameToSkelIndex.empty())
+                            It = std::find_if(m_BoneNameToSkelIndex.begin(), m_BoneNameToSkelIndex.end(), [](const auto& E) { return E.second == 0; });     // the root
                         if (It == m_BoneNameToSkelIndex.end())
                         {
                             return xerr::create_f<state, "A skin vertex references bone which is not found in the referenced skeleton">();
@@ -1486,6 +1490,12 @@ xerr ConvertToCompilerMesh(void)
                     xproperty::settings::context C;
                     if (!Existing.Serialize(true, std::format(L"{}/Skeleton/{:02X}/{:02X}/{:X}.desc/Descriptor.txt", m_ProjectPaths.m_Descriptors, Value & 0xFF, (Value >> 8) & 0xFF, Value), C))
                         Skeleton = std::move(Existing);
+                }
+                // The same runtime joints the skeleton compiler keeps (documentation/Editors/skeleton_runtime_folding_plan.md)
+                {
+                    auto Joints = m_RawSkeleton.RuntimeJoints();
+                    xskeleton_desc::merge::KeepIntentBones(Skeleton, m_RawSkeleton, Joints.m_Keep);
+                    m_RawSkeleton.FoldBones(Joints.m_Keep, Joints.m_bSyntheticRoot);
                 }
                 if (auto Err = xskeleton_desc::merge::BuildManifest<state>(Skeleton, m_RawSkeleton, m_Descriptor.m_ResolvedSkeletonBones
                     , [&](std::string Text) { LogMessage(xresource_pipeline::msg_type::WARNING, std::move(Text)); }); Err)
