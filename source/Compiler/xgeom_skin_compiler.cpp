@@ -1547,7 +1547,7 @@ xerr ConvertToCompilerMesh(void)
             if (m_Descriptor.m_ImportMaterials.m_bImport)
             {
                 displayProgressBar("Importing Materials", 0);
-                Emitter.Emit(m_RawGeom.m_MaterialInstance);
+                Emitter.Emit(m_RawGeom.m_MaterialInstance, m_RawGeom.m_Facet);
                 displayProgressBar("Importing Materials", 1);
             }
 
