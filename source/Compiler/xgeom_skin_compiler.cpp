@@ -1241,18 +1241,17 @@ xerr ConvertToCompilerMesh(void)
                 // correctness requirement, not an authoring convenience - though the check still
                 // avoids a no-op matrix multiply over every vertex when the skeleton has none.
                 //
-                if (   m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformScale       != xmath::fvec3::fromOne()
-                    || m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformTranslation != xmath::fvec3::fromZero()
-                    || m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformRotationDeg != xmath::fvec3::fromZero() )
+                // (only the skeleton's PreTransform: its PostTransform is for its frozen pose and its animations, not for the bind data the mesh is bound with)
+                const auto ApplySkeletonTransform = [&](const xmath::fvec3& Scale, const xmath::fvec3& RotationDeg, const xmath::fvec3& Translation)
                 {
-                    displayProgressBar("ApplyingSkeletonPreTransform", 0);
+                    if (Scale == xmath::fvec3::fromOne() && Translation == xmath::fvec3::fromZero() && RotationDeg == xmath::fvec3::fromZero()) return;
 
                     xmath::radian3 Rot;
-                    Rot.m_Roll  = xmath::radian{ xmath::DegToRad(m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformRotationDeg.m_Z) };
-                    Rot.m_Pitch = xmath::radian{ xmath::DegToRad(m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformRotationDeg.m_X) };
-                    Rot.m_Yaw   = xmath::radian{ xmath::DegToRad(m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformRotationDeg.m_Y) };
+                    Rot.m_Roll  = xmath::radian{ xmath::DegToRad(RotationDeg.m_Z) };
+                    Rot.m_Pitch = xmath::radian{ xmath::DegToRad(RotationDeg.m_X) };
+                    Rot.m_Yaw   = xmath::radian{ xmath::DegToRad(RotationDeg.m_Y) };
 
-                    const xmath::fmat4 M(m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformScale, Rot, m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformTranslation);
+                    const xmath::fmat4 M(Scale, Rot, Translation);
                     const xmath::fmat3 M2(Rot);
                     for (auto& E : m_RawGeom.m_Vertex)
                     {
@@ -1262,9 +1261,11 @@ xerr ConvertToCompilerMesh(void)
                         E.m_BTN[0].m_Binormal = M2 * E.m_BTN[0].m_Binormal;
                         E.m_BTN[0].m_Tangent  = M2 * E.m_BTN[0].m_Tangent;
                     }
+                };
 
-                    displayProgressBar("ApplyingSkeletonPreTransform", 1);
-                }
+                displayProgressBar("ApplyingSkeletonPreTransform", 0);
+                ApplySkeletonTransform( m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformScale,  m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformRotationDeg,  m_Descriptor.m_ResolvedSkeletonBones.m_PreTransformTranslation );
+                displayProgressBar("ApplyingSkeletonPreTransform", 1);
 
                 //
                 // Normalize Mesh
