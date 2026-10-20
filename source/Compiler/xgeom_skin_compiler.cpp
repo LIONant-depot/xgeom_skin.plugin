@@ -1557,6 +1557,9 @@ xerr ConvertToCompilerMesh(void)
             //
             // They are ordinary descriptors the user may edit (the Loop of a clip, the bones of a skeleton): one that exists is loaded and given only what
             // this skin owns (CopyOwned), a file is written only when its text changed (xresource_pipeline_virtual.h)
+            // Named after the model they come from ("Lily Skeleton"), not all "Skeleton": the user's own name stays (EmitInfo)
+            const std::string Model = xresource_pipeline::descriptor::base::NameOfFile(m_Descriptor.m_ImportAsset);
+            const auto        Named = [&](const char* pKind) { return Model.empty() ? std::string(pKind) : std::format("{} {}", Model, pKind); };
             auto EmitVirtual = [&](std::string_view Type, xresource::full_guid Guid, auto& Desc, const std::string& Name, auto&& CopyOwned, auto&& Tolerate)
             {
                 const auto      Folder = Emitter.DescriptorFolder(Type, Guid.m_Instance.m_Value);
@@ -1572,7 +1575,7 @@ xerr ConvertToCompilerMesh(void)
             {
                 xskeleton_desc::descriptor Skeleton;
                 Skeleton.m_ImportAsset = m_Descriptor.m_ImportAsset;
-                EmitVirtual("Skeleton", { m_Descriptor.m_SkeletonRef.m_Instance, xrsc::skeleton_type_guid_v }, Skeleton, "Skeleton"
+                EmitVirtual("Skeleton", { m_Descriptor.m_SkeletonRef.m_Instance, xrsc::skeleton_type_guid_v }, Skeleton, Named("Skeleton")
                     , [](xskeleton_desc::descriptor& Existing, const xskeleton_desc::descriptor& Fresh) { Existing.m_ImportAsset = Fresh.m_ImportAsset; }      // the bones, the masks, the pre-transform: the user's
                     , [](const xskeleton_desc::descriptor& D) { return !D.m_ImportAsset.empty(); });
             }
@@ -1584,7 +1587,7 @@ xerr ConvertToCompilerMesh(void)
                     xanim_package_desc::descriptor Package;
                     Package.m_SkeletonRef = m_Descriptor.m_SkeletonRef;
                     Package.m_ImportSources.push_back({ .m_Path = m_Descriptor.m_ImportAsset });     // no clip entries: every clip, with its defaults
-                    EmitVirtual("AnimPackage", { xgeom_skin::ImportedAnimations(m_ResourceGuid), xanim_package_desc::resource_type_guid_v }, Package, "Animations"
+                    EmitVirtual("AnimPackage", { xgeom_skin::ImportedAnimations(m_ResourceGuid), xanim_package_desc::resource_type_guid_v }, Package, Named("Animations")
                         , [](xanim_package_desc::descriptor& Existing, const xanim_package_desc::descriptor& Fresh)
                         {
                             // The skeleton and the file; the clips stay (the package matches them by OriginalName)

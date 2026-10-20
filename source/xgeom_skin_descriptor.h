@@ -166,6 +166,8 @@ namespace xgeom_skin
         {
         }
 
+        std::string SuggestedName() const noexcept override { return NameOfFile(m_ImportAsset); }
+
         void Validate(std::vector<std::string>& Errors) const noexcept override
         {
             //
