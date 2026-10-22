@@ -314,10 +314,11 @@ namespace xgeom_skin_editor::preview
                 if (pMI && pMat && pMI->m_nTexturesList > 0)
                 {
                     std::vector<xgpu::texture*> Textures;
+                    if (pMat->m_Flags.m_bSamplersFrom1) Textures.push_back(&m_ShadowMap);    // a graph material: its textures are samplers 1.. (same rule as xlionrender's MaterialOf)
                     Textures.reserve(pMI->m_nTexturesList);
                     for (auto& E : pMI->getTextures())
                     {
-                        if (&E == pMI->getTextures().data()) { Textures.push_back(&m_ShadowMap); continue; }
+                        if (!pMat->m_Flags.m_bSamplersFrom1 && &E == pMI->getTextures().data()) { Textures.push_back(&m_ShadowMap); continue; }
                         auto* pTexture = xresource::g_Mgr.getResource(Held.m_Textures[&E - pMI->getTextures().data()]);
                         Textures.push_back(pTexture ? pTexture : &m_White);
                     }
