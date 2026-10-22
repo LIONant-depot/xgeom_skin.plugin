@@ -84,6 +84,7 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
     ||(p = UserData.m_Device.Create(pXGPUGeom->IndexBuffer(),        xgpu::buffer::setup{.m_Type = xgpu::buffer::type::INDEX,   .m_EntryByteSize = (int)sizeof(std::uint16_t),                       .m_EntryCount = (int)pXGPUGeom->getIndices().size(),      .m_pData = pXGPUGeom->getIndices().data()}))
     ||(p = UserData.m_Device.Create(pXGPUGeom->ClusterBuffer(),      xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(xgeom_skin::geom::cluster_data),      .m_EntryCount = (int)pXGPUGeom->getClusterData().size(),  .m_pData = pXGPUGeom->getClusterData().data() }))
     ||(pXGPUGeom->getVertexColors().size() && (p = UserData.m_Device.Create(pXGPUGeom->ColorBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = (int)pXGPUGeom->getVertexColors().size(), .m_pData = pXGPUGeom->getVertexColors().data()})))
+    ||(pXGPUGeom->getUV1s().size() && (p = UserData.m_Device.Create(pXGPUGeom->UV1Buffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX, .m_EntryByteSize = (int)sizeof(pXGPUGeom->getUV1s()[0]), .m_EntryCount = (int)pXGPUGeom->getUV1s().size(), .m_pData = pXGPUGeom->getUV1s().data()})))
     ;
     assert(p == nullptr);
 
@@ -142,6 +143,7 @@ void xresource::loader< xrsc::geom_skin_type_guid_v >::Destroy(xresource::mgr& M
     UserData.m_Device.Destroy(std::move(Data.ClusterBuffer()));
     UserData.m_Device.Destroy(std::move(Data.BoneMapBuffer()));     // the shared dummy survives: the device only frees a buffer's last reference
     if (Data.ColorBuffer().m_Private) UserData.m_Device.Destroy(std::move(Data.ColorBuffer()));
+    if (Data.UV1Buffer().m_Private)   UserData.m_Device.Destroy(std::move(Data.UV1Buffer()));
 
     // Release all the material instance references
     for (auto& E : Data.getDefaultMaterialInstances())

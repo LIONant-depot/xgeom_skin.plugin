@@ -21,12 +21,13 @@ namespace xgeom_skin
         // does for material refs.
         // v3: added m_AnimationRef - the Anim Package of the skin's own animations (empty when the model has none or the skin does not import them)
         // v4: bone palettes - cluster_data's second vec4 W is the cluster's bone addressing (an integer), m_pBoneMap holds the palettes
-        // v5: optional streams - m_OptionalStreams, m_VertexColorOffset
-        inline static constexpr auto xserializer_version_v = 5;
+        // v5: optional streams - m_OptionalStreams, m_VertexColorOffset; v6: UV1 - m_UV1Offset
+        inline static constexpr auto xserializer_version_v = 6;
 
         // The optional vertex streams (m_OptionalStreams' bits), each its own vertex buffer after the core ones (vertex, vertex_extras).
         // A stream the geometry lacks is bound as a constant default (xLIONRender: white for COLOR0) so the shader reads every one
         inline static constexpr std::uint8_t stream_color0_v = 1 << 0;     // std::uint32_t RGBA8, sRGB (the vertex shader decodes it to linear)
+        inline static constexpr std::uint8_t stream_uv1_v    = 1 << 1;     // float2, the second UV set (without it the shaders read UV0)
         struct mesh
         {
             std::array<char, 32>    m_Name;
@@ -211,7 +212,7 @@ namespace xgeom_skin
         };
         static_assert(sizeof(vertex_extras) == 12);
 
-        using runtime_allocation = std::array<std::size_t, 6*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
+        using runtime_allocation = std::array<std::size_t, 7*(sizeof(std::shared_ptr<int>) / sizeof(std::size_t))>;
 
         //-------------------------------------------------------------------------
 
@@ -230,6 +231,7 @@ namespace xgeom_skin
         inline std::span<std::uint16_t>                 getIndices                  (void)                              const   noexcept { return { reinterpret_cast<std::uint16_t*>(m_pData + m_IndicesOffset),        m_nIndices  }; }
         inline std::span<cluster_data>                  getClusterData              (void)                              const   noexcept { return { reinterpret_cast<cluster_data*> (m_pData + m_ClusterDataOffset),    m_nClusters }; }
         inline std::span<std::uint32_t>                 getVertexColors             (void)                              const   noexcept { return { reinterpret_cast<std::uint32_t*>(m_pData + m_VertexColorOffset),    (m_OptionalStreams & stream_color0_v) ? m_nVertices : 0u }; }
+        inline std::span<std::array<float, 2>>         getUV1s                     (void)                              const   noexcept { return { reinterpret_cast<std::array<float, 2>*>(m_pData + m_UV1Offset),     (m_OptionalStreams & stream_uv1_v)    ? m_nVertices : 0u }; }
         inline std::span<xrsc::material_instance_ref>   getDefaultMaterialInstances (void)                              const   noexcept { return { m_pDefaultMaterialInstances, m_nDefaultMaterialInstances }; }
         inline xrsc::skeleton                           getSkeletonRef              (void)                              const   noexcept { return m_SkeletonRef; }
         inline xrsc::anim_package                       getAnimationRef             (void)                              const   noexcept { return m_AnimationRef; }
@@ -274,6 +276,7 @@ namespace xgeom_skin
         std::uint32_t                   m_nBoneMap;
         std::uint8_t                    m_OptionalStreams;      // stream_*_v bits
         std::size_t                     m_VertexColorOffset;    // stream_color0_v: into m_pData
+        std::size_t                     m_UV1Offset;            // stream_uv1_v: into m_pData
     };
 
     //-------------------------------------------------------------------------
@@ -500,6 +503,7 @@ namespace xserializer::io_functions
             || (Err = Stream.Serialize(Geom.m_nIndices))
             || (Err = Stream.Serialize(Geom.m_OptionalStreams))
             || (Err = Stream.Serialize(Geom.m_VertexColorOffset))
+            || (Err = Stream.Serialize(Geom.m_UV1Offset))
             ;
         return Err;
     }
