@@ -323,7 +323,7 @@ namespace xgeom_skin_editor::preview
                         auto* pTexture = xresource::g_Mgr.getResource(Held.m_Textures[&E - pMI->getTextures().data()]);
                         Textures.push_back(pTexture ? pTexture : &m_White);
                     }
-                    if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }))) continue;
+                    if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }, pMat->m_Flags.m_bTextureTable))) continue;
                 }
 
                 const auto Textures = std::array<xgpu::texture*, 2>{ &m_ShadowMap, &m_White };
