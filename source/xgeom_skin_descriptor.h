@@ -88,14 +88,20 @@ namespace xgeom_skin
     };
     XPROPERTY_REG(delete_entry)
 
+    // A material of the source file, addressed by its name ("MaterialDetailsList[G:key]/...", key = xmaterial_instance::import::MaterialKey(name),
+    // xproperty::keyed_vector): the instance assigned to it stays with it when the source file adds, removes or reorders its materials
     struct material_details
     {
+        std::uint64_t               m_Key       = 0;            // MaterialKey(m_Name): its address (the path's; written by its Name)
         std::string                 m_Name;
-        int                         m_RefCount = 0;
+        int                         m_RefCount  = 0;
+        xrsc::material_instance_ref m_Instance  = {};           // saved here; the MaterialInstance list (by place) is what the editor shows and edits
         XPROPERTY_DEF
         ( "material_details", material_details
-        , obj_member<"Name", &material_details::m_Name, member_flags< flags::SHOW_READONLY> >
+        , obj_member<"Name", +[](material_details& O, bool bRead, std::string& V) { if (bRead) V = O.m_Name; else { O.m_Name = V; O.m_Key = xmaterial_instance::import::MaterialKey(V); } }
+            , member_flags< flags::SHOW_READONLY> >
         , obj_member<"RefCount", &material_details::m_RefCount, member_flags< flags::SHOW_READONLY> >
+        , obj_member<"Instance", &material_details::m_Instance, member_flags< flags::DONT_SHOW>, member_help<"The material instance assigned to this material (saved here; edited in the MaterialInstance list)">>
         )
     };
     XPROPERTY_REG(material_details)
@@ -542,8 +548,12 @@ namespace xgeom_skin
 
         xerr Serialize(bool isReading, std::wstring_view FileName, xproperty::settings::context& Context) noexcept override
         {
+            // the materials are saved by name, each with its instance (xmaterial_instance::import::SlotsToMaterials / SlotsFromMaterials)
+            if (not isReading) xmaterial_instance::import::SlotsToMaterials(m_MaterialDetailsList, m_MaterialInstRefList);
+            else               m_MaterialInstRefList.clear();
             if (auto Err = xresource_pipeline::descriptor::base::Serialize(isReading, FileName, Context); Err)
                 return Err;
+            if (isReading) xmaterial_instance::import::SlotsFromMaterials(m_MaterialDetailsList, m_MaterialInstRefList);
 
             if (not isReading) return {};
             if (m_SkeletonRef.empty()) return {};
@@ -602,8 +612,8 @@ namespace xgeom_skin
         std::wstring                                m_ImportAsset           = {};
         bool                                        m_bMergeAllMeshes       = true;
         mesh_details                                m_AllMeshesDetails      = {};
-        std::vector<material_details>               m_MaterialDetailsList   = {};
-        std::vector<xrsc::material_instance_ref>    m_MaterialInstRefList   = {};
+        xproperty::keyed_vector<material_details, &material_details::m_Key> m_MaterialDetailsList = {};     // by material name
+        std::vector<xrsc::material_instance_ref>    m_MaterialInstRefList   = {};       // per material, by place: what the editor and the import edit (not saved: each entry keeps its own)
         std::vector<ungroup_mesh>                   m_UngroupMeshList       = {};
         std::vector<merge_group>                    m_MergeGroupList        = {};
         std::vector<delete_entry>                   m_DeleteEntryList       = {};
@@ -657,7 +667,7 @@ namespace xgeom_skin
             , obj_member<"Deleted List", &descriptor::m_DeleteEntryList >
             , obj_member<"MaterialDetailsList", &descriptor::m_MaterialDetailsList, member_flags<flags::DONT_SHOW>>
             , obj_member<"ImportMaterials",     &descriptor::m_ImportMaterials, member_ui_open<true>, member_help<"Import the materials and textures of the model (generated, virtual resources) instead of assigning every material instance by hand">>
-            , obj_member<"MaterialInstance", &descriptor::m_MaterialInstRefList, member_ui_open<true>, member_array_size_readonly<> >
+            , obj_member<"MaterialInstance", &descriptor::m_MaterialInstRefList, member_flags<flags::DONT_SAVE>, member_ui_open<true>, member_array_size_readonly<> >
             , obj_member<"ResolvedSkeletonBones", &descriptor::m_ResolvedSkeletonBones, member_flags<flags::DONT_SHOW, flags::DONT_SAVE> >
         )
     };
@@ -883,7 +893,7 @@ namespace xgeom_skin
         {
             if (auto Index = findMaterial(E); Index == -1)
             {
-                m_MaterialDetailsList.emplace_back(E);
+                m_MaterialDetailsList.emplace_back(material_details{ .m_Key = xmaterial_instance::import::MaterialKey(E), .m_Name = E });
                 m_MaterialInstRefList.emplace_back();
             }
         }
