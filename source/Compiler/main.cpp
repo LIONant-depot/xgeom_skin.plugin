@@ -6,11 +6,6 @@
 
 int main( int argc, const char* argv[] )
 {
-    //
-    // Initialize the scheduler system with all hardware threads
-    //
-    xscheduler::g_System.Init();
-
     if (argc == 2 && std::string_view(argv[1]) == "-SELFTEST") return xgeom_skin_compiler::SelfTest();
 
     //
@@ -58,6 +53,9 @@ int main( int argc, const char* argv[] )
     //
     // Start compilation
     //
+    // The scheduler with the threads the editor gave this compile (-THREADS; every core without it)
+    xscheduler::g_System.Init(GeomCompilerPipeline->getThreadCount());
+
     if (auto Err = GeomCompilerPipeline->Compile(); Err)
     {
         Err.ForEachInChain([&](xerr Error)
