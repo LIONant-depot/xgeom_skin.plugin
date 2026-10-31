@@ -79,12 +79,12 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
 
     // Ideally in the future all these buffer should be a single allocation...
     0
-    ||(p = UserData.m_Device.Create(pXGPUGeom->VertexBuffer(),       xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX,  .m_EntryByteSize = (int)sizeof(xgeom_skin::geom::vertex),            .m_EntryCount = (int)pXGPUGeom->getVertices().size(),     .m_pData = pXGPUGeom->getVertices().data()}))
-    ||(p = UserData.m_Device.Create(pXGPUGeom->VertexExtrasBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX,  .m_EntryByteSize = (int)sizeof(xgeom_skin::geom::vertex_extras),     .m_EntryCount = (int)pXGPUGeom->getVertexExtras().size(), .m_pData = pXGPUGeom->getVertexExtras().data()}))
-    ||(p = UserData.m_Device.Create(pXGPUGeom->IndexBuffer(),        xgpu::buffer::setup{.m_Type = xgpu::buffer::type::INDEX,   .m_EntryByteSize = (int)sizeof(std::uint16_t),                       .m_EntryCount = (int)pXGPUGeom->getIndices().size(),      .m_pData = pXGPUGeom->getIndices().data()}))
-    ||(p = UserData.m_Device.Create(pXGPUGeom->ClusterBuffer(),      xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(xgeom_skin::geom::cluster_data),      .m_EntryCount = (int)pXGPUGeom->getClusterData().size(),  .m_pData = pXGPUGeom->getClusterData().data() }))
-    ||(pXGPUGeom->getVertexColors().size() && (p = UserData.m_Device.Create(pXGPUGeom->ColorBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = (int)pXGPUGeom->getVertexColors().size(), .m_pData = pXGPUGeom->getVertexColors().data()})))
-    ||(pXGPUGeom->getUV1s().size() && (p = UserData.m_Device.Create(pXGPUGeom->UV1Buffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX, .m_EntryByteSize = (int)sizeof(pXGPUGeom->getUV1s()[0]), .m_EntryCount = (int)pXGPUGeom->getUV1s().size(), .m_pData = pXGPUGeom->getUV1s().data()})))
+    ||(p = UserData.m_Device.Create(pXGPUGeom->VertexBuffer(),       xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX,  .m_EntryByteSize = (int)sizeof(xgeom_skin::geom::vertex),            .m_EntryCount = (int)pXGPUGeom->getVertices().size(),     .m_pData = pXGPUGeom->getVertices().data(), .m_pName = "Geometry: skin vertices"}))
+    ||(p = UserData.m_Device.Create(pXGPUGeom->VertexExtrasBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX,  .m_EntryByteSize = (int)sizeof(xgeom_skin::geom::vertex_extras),     .m_EntryCount = (int)pXGPUGeom->getVertexExtras().size(), .m_pData = pXGPUGeom->getVertexExtras().data(), .m_pName = "Geometry: skin vertex extras"}))
+    ||(p = UserData.m_Device.Create(pXGPUGeom->IndexBuffer(),        xgpu::buffer::setup{.m_Type = xgpu::buffer::type::INDEX,   .m_EntryByteSize = (int)sizeof(std::uint16_t),                       .m_EntryCount = (int)pXGPUGeom->getIndices().size(),      .m_pData = pXGPUGeom->getIndices().data(), .m_pName = "Geometry: skin indices"}))
+    ||(p = UserData.m_Device.Create(pXGPUGeom->ClusterBuffer(),      xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(xgeom_skin::geom::cluster_data),      .m_EntryCount = (int)pXGPUGeom->getClusterData().size(),  .m_pData = pXGPUGeom->getClusterData().data(), .m_pName = "Geometry: skin clusters" }))
+    ||(pXGPUGeom->getVertexColors().size() && (p = UserData.m_Device.Create(pXGPUGeom->ColorBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = (int)pXGPUGeom->getVertexColors().size(), .m_pData = pXGPUGeom->getVertexColors().data(), .m_pName = "Geometry: skin colours"})))
+    ||(pXGPUGeom->getUV1s().size() && (p = UserData.m_Device.Create(pXGPUGeom->UV1Buffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::VERTEX, .m_EntryByteSize = (int)sizeof(pXGPUGeom->getUV1s()[0]), .m_EntryCount = (int)pXGPUGeom->getUV1s().size(), .m_pData = pXGPUGeom->getUV1s().data(), .m_pName = "Geometry: skin uv1"})))
     ;
     assert(p == nullptr);
 
@@ -93,7 +93,7 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
     {
         std::vector<std::uint32_t> Words((pXGPUGeom->m_nBoneMap + 1) / 2, 0u);
         std::memcpy(Words.data(), pXGPUGeom->m_pBoneMap, pXGPUGeom->m_nBoneMap * sizeof(std::uint16_t));
-        p = UserData.m_Device.Create(pXGPUGeom->BoneMapBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = (int)Words.size(), .m_pData = Words.data()});
+        p = UserData.m_Device.Create(pXGPUGeom->BoneMapBuffer(), xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = (int)Words.size(), .m_pData = Words.data(), .m_pName = "Geometry: bone map"});
         assert(p == nullptr);
     }
     else
@@ -102,7 +102,7 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
         {
             xgpu::buffer        B;
             std::uint32_t       Zero = 0;
-            [[maybe_unused]] auto* e = UserData.m_Device.Create(B, xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = 1, .m_pData = &Zero});
+            [[maybe_unused]] auto* e = UserData.m_Device.Create(B, xgpu::buffer::setup{.m_Type = xgpu::buffer::type::STORAGE, .m_EntryByteSize = (int)sizeof(std::uint32_t), .m_EntryCount = 1, .m_pData = &Zero, .m_pName = "Geometry: bone map dummy"});
             assert(e == nullptr);
             return B;
         }();
