@@ -36,7 +36,7 @@ namespace xgeom_skin_editor
         bool Init(xgpu::device& Device) noexcept override
         {
             if (m_bReady) return true;
-            if (!m_Runtime.Init(Device)) return false;   // always shadow-enabled internally (runtime::Init hardcodes scene::Init(Device, true))
+            if (!m_Runtime.Init(Device, true)) return false;   // always shadow-enabled internally (runtime::Init hardcodes scene::Init(Device, true))
             m_bReady = true;
             return true;
         }
