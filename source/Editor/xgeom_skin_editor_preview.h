@@ -184,7 +184,7 @@ namespace xgeom_skin_editor::preview
             m_LightView.setFov(50_xdeg);
             m_LightView.setViewport({ 0, 0, m_ShadowMap.getTextureDimensions()[0], m_ShadowMap.getTextureDimensions()[1] });
 
-            if (!Ok(m_Renderer.Init(Device))) return false;
+            if (!Ok(m_Renderer.Init(Device, xlionrender::instance::setup::Preview()))) return false;      // (a small shadow pool, no probes)
             m_RenderView.m_Background = { 0.45f, 0.45f, 0.45f, 1.0f };     // the grey the preview and the thumbnails always had
 
             if (!Ok(Device.Create(m_ShadowUBO, { .m_Type = xgpu::buffer::type::UNIFORM, .m_Usage = xgpu::buffer::setup::usage::CPU_WRITE_GPU_READ, .m_EntryByteSize = sizeof(ubo_shadow_generation_mesh), .m_EntryCount = 100 }))) return false;
