@@ -327,6 +327,7 @@ namespace xgeom_skin_editor::preview
                     }
                     if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }, pMat->m_Flags.m_bTextureTable)))
                     {
+                        if (pMat->getShaderTile().m_Private) (void)m_Renderer.SetMaterialTile(m_Materials[Index], pMat->getShaderTile());
                         if (pMat->getShaderGBuffer().m_Private) (void)m_Renderer.SetMaterialGBuffer(m_Materials[Index], pMat->getShaderGBuffer());     // (xLIONRender's screen tail: its thin G-buffer)
                         continue;
                     }
