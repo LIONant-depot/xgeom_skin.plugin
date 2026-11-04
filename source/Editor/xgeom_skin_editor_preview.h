@@ -325,7 +325,7 @@ namespace xgeom_skin_editor::preview
                         auto* pTexture = xresource::g_Mgr.getResource(Held.m_Textures[&E - pMI->getTextures().data()]);
                         Textures.push_back(pTexture ? pTexture : &m_White);
                     }
-                    if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), { pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }, pMat->m_Flags.m_bTextureTable)))
+                    if (Ok(m_Renderer.CreateMaterial(m_Materials[Index], pMat->getShaderHDR(), Textures, xmaterial::RenderState(pMat->m_Render, pMI->m_DoubleSided), pMI->m_LayoutHash == pMat->m_LayoutHash ? std::span<const float>{ pMI->m_pParams, pMI->m_BlockBytes / 4u } : std::span<const float>{ pMat->m_pDefaultBlock, pMat->m_BlockBytes / 4u }, pMat->m_Flags.m_bTextureTable)))
                     {
                         if (pMat->getShaderTile().m_Private) (void)m_Renderer.SetMaterialTile(m_Materials[Index], pMat->getShaderTile());
                         if (pMat->getShaderGBuffer().m_Private) (void)m_Renderer.SetMaterialGBuffer(m_Materials[Index], pMat->getShaderGBuffer());     // (xLIONRender's screen tail: its thin G-buffer)
