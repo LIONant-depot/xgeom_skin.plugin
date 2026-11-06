@@ -54,7 +54,7 @@ namespace xgeom_skin_compiler
 
         struct lod
         {
-            float                           m_ScreenArea;
+            float                           m_Error;        // object space, chained (GenenateLODs)
             std::vector<std::uint32_t>      m_Indices;
         };
 
@@ -365,27 +365,58 @@ xerr ConvertToCompilerMesh(void)
                 if (details->m_LODs.empty())
                     continue;
 
+                // (as xgeom_static's SimplifyChain: the count decides, the error is recorded - the renderer picks a LOD by its error in pixels on
+                // the screen; attribute-aware, the seams kept; a LOD that cuts less than a quarter of the previous one is dropped. The border free,
+                // unlike xgeom_static's: a skin's submeshes switch LOD together, and locked, a clothing piece's open edges stalled its submesh -
+                // ren's LOD 1 error 0.107 against 0.003 free, the mesh's error the largest of its submeshes')
                 for (auto& S : M.m_SubMesh)
                 {
-                    std::size_t IndexCount = S.m_Indices.size();
-
-                    for (size_t i = 0; i < details->m_LODs.size(); ++i)
+                    const std::size_t nV = S.m_Vertex.size();
+                    if (nV == 0) continue;
+                    const int nA = 3 + 2 + (S.m_bHasUV1 ? 2 : 0);
+                    std::vector<float> Attr(nV * std::size_t(nA)), Weights{ 0.5f, 0.5f, 0.5f, 1.0f, 1.0f };
+                    if (S.m_bHasUV1) Weights.insert(Weights.end(), { 0.5f, 0.5f });
+                    for (std::size_t v = 0; v < nV; ++v)
                     {
-                        const std::size_t target_index_count = std::size_t(IndexCount * details->m_LODs[i].m_LODReduction + 0.005f) / 3 * 3;
-                        const float target_error = 1e-2f;
-                        const auto& Source = (S.m_LODs.size()) ? S.m_LODs.back().m_Indices : S.m_Indices;
-
-                        if (Source.size() < target_index_count)
-                            break;
-
+                        const auto& V = S.m_Vertex[v];
+                        float* p = &Attr[v * std::size_t(nA)];
+                        *p++ = V.m_Normal.m_X; *p++ = V.m_Normal.m_Y; *p++ = V.m_Normal.m_Z;
+                        *p++ = V.m_UVs[0].m_X; *p++ = V.m_UVs[0].m_Y;
+                        if (S.m_bHasUV1) { *p++ = V.m_UVs[1].m_X; *p++ = V.m_UVs[1].m_Y; }
+                    }
+                    std::size_t IndexCount = S.m_Indices.size();
+                    float       Error      = 0;
+                    S.m_LODs.reserve(S.m_LODs.size() + details->m_LODs.size());      // (Source below references the last LOD: no reallocation under it)
+                    for (const auto& L : details->m_LODs)
+                    {
+                        const std::size_t target_index_count = std::size_t(IndexCount * L.m_LODReduction + 0.005f) / 3 * 3;
+                        const auto& Source = S.m_LODs.size() ? S.m_LODs.back().m_Indices : S.m_Indices;
+                        if (Source.size() < target_index_count) break;
                         auto& NewLod = S.m_LODs.emplace_back();
-
                         NewLod.m_Indices.resize(Source.size());
-                        std::size_t new_size = meshopt_simplify(NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position[0], S.m_Vertex.size(), sizeof(vertex), target_index_count, target_error);
+                        float LodError = 0;
+                        const std::size_t new_size = meshopt_simplifyWithAttributes(NewLod.m_Indices.data(), Source.data(), Source.size(), &S.m_Vertex[0].m_Position[0], nV, sizeof(vertex)
+                                                                                  , Attr.data(), sizeof(float) * std::size_t(nA), Weights.data(), std::size_t(nA), nullptr, target_index_count, FLT_MAX
+                                                                                  , meshopt_SimplifyErrorAbsolute | meshopt_SimplifyErrorClamped, &LodError);
                         NewLod.m_Indices.resize(new_size);
-
+                        if (new_size > Source.size() * 3 / 4 || new_size == 0)
+                        {
+                            LogMessage(xresource_pipeline::msg_type::INFO, std::format("LOD {} of {} (a submesh): dropped, {} of {} indices left (asked {})", S.m_LODs.size(), M.m_Name, new_size, Source.size(), target_index_count));
+                            S.m_LODs.pop_back(); break;
+                        }
+                        Error += LodError;
+                        NewLod.m_Error = Error;
                         IndexCount = new_size;
                     }
+                }
+                for (std::size_t k = 0;; ++k)                   // (the log: each LOD's triangles and error, all its submeshes)
+                {
+                    std::size_t nTris = 0; float E = 0; bool bAny = k == 0;          // (as written: a submesh with fewer LODs repeats its coarsest)
+                    for (const auto& S : M.m_SubMesh)
+                        if (k == 0 || S.m_LODs.empty()) nTris += S.m_Indices.size() / 3;
+                        else { const auto& L = S.m_LODs[std::min(k - 1, S.m_LODs.size() - 1)]; nTris += L.m_Indices.size() / 3; E = std::max(E, L.m_Error); bAny |= k - 1 < S.m_LODs.size(); }
+                    if (!bAny) break;
+                    LogMessage(xresource_pipeline::msg_type::INFO, std::format("LOD {} of {}: {} triangles, error {:.5f}", k, M.m_Name, nTris, E));
                 }
             }
         }
@@ -956,7 +987,9 @@ xerr ConvertToCompilerMesh(void)
                 out_m.m_Name[31]        = '\0';
                 out_m.m_WorldPixelSize  = (num_edges > 0) ? total_edge_len / num_edges : 0.0f;
                 out_m.m_BBox            = mesh_bb.to_fbbox();
-                out_m.m_nLODs           = static_cast<uint16_t>(input_mesh.m_SubMesh.empty() ? 1 : input_mesh.m_SubMesh[0].m_LODs.size() + 1);
+                std::size_t nSubLODs = 0;                       // (the most of its submeshes'; one with fewer repeats its coarsest)
+                for (const auto& S : input_mesh.m_SubMesh) nSubLODs = std::max(nSubLODs, S.m_LODs.size());
+                out_m.m_nLODs           = static_cast<uint16_t>(nSubLODs + 1);
                 out_m.m_iLOD            = current_lod_idx;
                 OutMeshes.push_back(out_m);
 
@@ -964,7 +997,8 @@ xerr ConvertToCompilerMesh(void)
                 for (size_t lod_level = 0; lod_level < out_m.m_nLODs; ++lod_level)
                 {
                     geom::lod out_l;
-                    out_l.m_ScreenArea  = (lod_level == 0) ? 1.0f : (input_mesh.m_SubMesh.empty() ? 0.0f : input_mesh.m_SubMesh[0].m_LODs[lod_level - 1].m_ScreenArea);
+                    out_l.m_Error       = 0.0f;                     // (the largest of its submeshes')
+                    if (lod_level > 0) for (const auto& S : input_mesh.m_SubMesh) if (!S.m_LODs.empty()) out_l.m_Error = std::max(out_l.m_Error, S.m_LODs[std::min(lod_level - 1, S.m_LODs.size() - 1)].m_Error);
                     out_l.m_iSubmesh    = current_submesh_idx;
                     out_l.m_nSubmesh    = static_cast<uint16_t>(input_mesh.m_SubMesh.size());
                     OutLODs.push_back(out_l);
@@ -976,7 +1010,7 @@ xerr ConvertToCompilerMesh(void)
                         out_sm.m_iMaterial  = static_cast<uint16_t>(input_sm.m_iMaterial);
                         out_sm.m_iCluster   = current_cluster_idx;
 
-                        const std::vector<uint32_t>&  lod_indices     = (lod_level == 0) ? input_sm.m_Indices : ((lod_level - 1 < input_sm.m_LODs.size()) ? input_sm.m_LODs[lod_level - 1].m_Indices : input_sm.m_Indices);
+                        const std::vector<uint32_t>&  lod_indices     = (lod_level == 0) ? input_sm.m_Indices : (input_sm.m_LODs.empty() ? input_sm.m_Indices : input_sm.m_LODs[std::min(lod_level - 1, input_sm.m_LODs.size() - 1)].m_Indices);
                         auto                          binormal_signs  = std::vector<float>(input_sm.m_Vertex.size(), 1.0f);
                         for (size_t i = 0; i < input_sm.m_Vertex.size(); ++i)
                         {

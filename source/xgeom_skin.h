@@ -39,7 +39,7 @@ namespace xgeom_skin
 
         struct lod
         {
-            float                   m_ScreenArea;
+            float                   m_Error;            // the LOD's simplification error, object space (0: LOD 0) - the renderer's projected-error pick, as xgeom_static's (was m_ScreenArea: never read, the same layout)
             std::uint16_t           m_iSubmesh;         // Start the submeshes
             std::uint16_t           m_nSubmesh;
         };
@@ -374,7 +374,7 @@ namespace xserializer::io_functions
     {
         xerr Err;
         false
-            || (Err = Stream.Serialize(Lod.m_ScreenArea))
+            || (Err = Stream.Serialize(Lod.m_Error))
             || (Err = Stream.Serialize(Lod.m_iSubmesh))
             || (Err = Stream.Serialize(Lod.m_nSubmesh))
             ;
