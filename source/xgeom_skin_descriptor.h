@@ -16,7 +16,7 @@ namespace xgeom_skin
     // While this should be just a type... it also happens to be an instance... the instance of the skin_geom_plugin
     // So while generating the type guid we must treat it as an instance.
     inline static constexpr auto    resource_type_guid_v = xresource::type_guid(xresource::guid_generator::Instance64FromString("GeomSkin"));
-    static constexpr wchar_t        mesh_filter_v[] = L"Mesh\0 *.fbx; *.obj\0Any Thing\0 *.*\0";
+    static constexpr wchar_t        mesh_filter_v[] = L"Mesh\0 *.fbx; *.obj; *.blend\0Any Thing\0 *.*\0";
 
     struct lod
     {
@@ -34,11 +34,13 @@ namespace xgeom_skin
     {
         std::string                 m_Name = {};
         std::vector<lod>            m_LODs = {};
+        bool                        m_bGenerateLODs = true;     // (LODs empty: an automatic chain, each half the previous one)
 
         XPROPERTY_DEF
         ( "mesh_details", mesh_details
         , obj_member<"Name", &mesh_details::m_Name >
         , obj_member<"LODs", &mesh_details::m_LODs >
+        , obj_member<"GenerateLODs", &mesh_details::m_bGenerateLODs, member_help<"With no LODs listed, the compiler makes them: up to 4, each half the previous one's triangles. Off: no LODs">>
         )
     };
     XPROPERTY_REG(mesh_details)

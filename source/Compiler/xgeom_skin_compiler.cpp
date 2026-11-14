@@ -362,8 +362,9 @@ xerr ConvertToCompilerMesh(void)
                     continue;
 
                 auto* details = it->second;
-                if (details->m_LODs.empty())
-                    continue;
+                // (none in the descriptor: an automatic chain, each LOD half the previous one's indices - a LOD that cuts too little is dropped below)
+                if (details->m_LODs.empty() && details->m_bGenerateLODs) details->m_LODs.assign(4, { .m_LODReduction = 0.5f, .m_ScreenArea = 0 });
+                if (details->m_LODs.empty()) continue;
 
                 // (as xgeom_static's SimplifyChain: the count decides, the error is recorded - the renderer picks a LOD by its error in pixels on
                 // the screen; attribute-aware, the seams kept; a LOD that cuts less than a quarter of the previous one is dropped. The border free,
@@ -989,6 +990,11 @@ xerr ConvertToCompilerMesh(void)
                 out_m.m_BBox            = mesh_bb.to_fbbox();
                 std::size_t nSubLODs = 0;                       // (the most of its submeshes'; one with fewer repeats its coarsest)
                 for (const auto& S : input_mesh.m_SubMesh) nSubLODs = std::max(nSubLODs, S.m_LODs.size());
+                // (a mesh LOD keeping more than 3/4 of the previous one's triangles is dropped, with the ones after it: its submeshes could not simplify further)
+                {
+                    const auto Tris = [&](std::size_t k) { std::size_t n = 0; for (const auto& S : input_mesh.m_SubMesh) n += (k == 0 || S.m_LODs.empty() ? S.m_Indices.size() : S.m_LODs[std::min(k - 1, S.m_LODs.size() - 1)].m_Indices.size()) / 3; return n; };
+                    for (std::size_t k = 1; k <= nSubLODs; ++k) if (Tris(k) * 4 > Tris(k - 1) * 3) { LogMessage(xresource_pipeline::msg_type::INFO, std::format("LODs of {}: {} kept, LOD {} dropped ({} of {} triangles: under a quarter less)", input_mesh.m_Name, k - 1, k, Tris(k), Tris(k - 1))); nSubLODs = k - 1; break; }
+                }
                 out_m.m_nLODs           = static_cast<uint16_t>(nSubLODs + 1);
                 out_m.m_iLOD            = current_lod_idx;
                 OutMeshes.push_back(out_m);
