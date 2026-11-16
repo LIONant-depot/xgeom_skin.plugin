@@ -168,6 +168,8 @@ namespace xgeom_skin_editor::preview
         std::uint64_t                           m_EnvInstance        = 0;
 
         std::vector<xmath::fmat4>                   m_SkinMatrices;
+        // Where the posed skin is when it moves away from its bind box (the Ragdoll editor's falls): the renderer culls by it. Empty (min > max): the geometry's box
+        xmath::fbbox                                m_PoseBounds{ xmath::fvec3(1e30f), xmath::fvec3(-1e30f) };
 
         template<std::size_t N>
         static xgpu::shader::setup ShaderSetup(xgpu::shader::type::bit Type, const std::uint32_t (&Code)[N]) noexcept
@@ -423,7 +425,7 @@ namespace xgeom_skin_editor::preview
             // sized to the geometry), with a soft fill
             const float Radius = Geom.m_BBox.getRadius();
             xlionrender::scene Scene;
-            if (Geom.m_nVertices) Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_L2W = xmath::fmat4::fromIdentity(), .m_Materials = m_Materials });
+            if (Geom.m_nVertices) Scene.m_Draws.push_back({ .m_Mesh = m_Mesh, .m_L2W = xmath::fmat4::fromIdentity(), .m_Materials = m_Materials, .m_Bounds = m_PoseBounds });
             Scene.m_Sun     = { .m_Direction = m_Center - m_LightView.getPosition(), .m_Temperature = 6500, .m_Intensity = 4, .m_ShadowTileSize = std::max(Radius * 0.5f, 0.001f) };
             Scene.m_Ambient = { 0.7f, 0.7f, 0.7f };
 
