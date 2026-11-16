@@ -5,6 +5,7 @@
 #include "dependencies/xmath/source/xmath_fshapes.h"
 #include "dependencies/xserializer/source/xserializer.h"
 #include "plugins/xskeleton.plugin/source/xskeleton_xgpu_rsc_loader.h"
+#include "plugins/xmaterial_instance.plugin/source/xmaterial_instance_xgpu_rsc_loader.h"     // (xrsc::material_instance_ref)
 #include "plugins/xanim_package.plugin/source/xanim_package_xgpu_rsc_loader.h"
 #include <span>  // Add for std::span
 #include <algorithm>
