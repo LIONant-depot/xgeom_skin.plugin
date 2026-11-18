@@ -7,6 +7,7 @@
 // Animation Package editor): the same look everywhere.
 #include "plugins/xgeom_skin.plugin/source/Editor/xgeom_skin_editor_preview.h"
 #include "plugins/xskeleton.plugin/source/Editor/xskeleton_viewport.h"
+#include "dependencies/xAnimation/source/xanimation_env.h"      // (xanimation::Env: std::getenv without MSVC's C4996)
 #include <span>
 #include <vector>
 
@@ -80,7 +81,7 @@ namespace xgeom_skin_editor
                            : !SrcWorlds.empty() ? SrcWorlds[0] * m_SrcInvRest[0] : xmath::fmat4::fromIdentity();
                 Out[s] = m_Delta[s] * m_SkinRest[s];
             }
-            static const bool bDiag = [] { const char* e = std::getenv("XLION_SKIN_UNDER_DIAG"); return e && *e == '1'; }();
+            static const bool bDiag = [] { const char* e = xanimation::Env("XLION_SKIN_UNDER_DIAG"); return e && *e == '1'; }();
             if (bDiag)
             {   // (narrowing: the bones stretched most from their parent, posed vs rest)
                 std::vector<std::pair<float, int>> St;
@@ -89,7 +90,7 @@ namespace xgeom_skin_editor
                 std::sort(St.rbegin(), St.rend());
                 for (std::size_t k = 0; k < St.size() && k < 4; ++k) std::printf("[SkinUnder] stretch %.3f at skin bone %d (source %d, parent %d)\n", St[k].first, St[k].second, m_Map[std::size_t(St[k].second)], KB[std::size_t(St[k].second)].m_iParent);
             }
-            static const bool bRest = [] { const char* e = std::getenv("XLION_SKIN_UNDER_REST"); return e && *e == '1'; }();     // (narrowing: the skin at its own rest)
+            static const bool bRest = [] { const char* e = xanimation::Env("XLION_SKIN_UNDER_REST"); return e && *e == '1'; }();     // (narrowing: the skin at its own rest)
             if (bRest) Out = m_SkinRest;
         }
         const xskeleton::skeleton*  m_pMapSrc = nullptr; const xskeleton::skeleton* m_pMapSkin = nullptr;
