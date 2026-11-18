@@ -353,8 +353,32 @@ xerr ConvertToCompilerMesh(void)
 
         //--------------------------------------------------------------------------------------
 
+        // C68: vertices weighted to the skeleton's ROOT (the source's own, or folded nodes above it resolved there): they stay where the root is while a clip
+        // walks the hips away (a sliver back at the origin). Said per submesh, with where those vertices are, so the art can be checked.
+        void ReportTopBoneWeights()
+        {
+            const auto& Bones = m_Descriptor.m_ResolvedSkeletonBones.m_Bones;
+            auto Top = [&](int b) { return b >= 0 && b < int(Bones.size()) && Bones[std::size_t(b)].m_iParent < 0; };
+            for (const auto& M : m_CompilerMesh)
+                for (const auto& S : M.m_SubMesh)
+                {
+                    int n = 0; float WMax = 0; xmath::fvec3 Lo(1e30f, 1e30f, 1e30f), Hi(-1e30f, -1e30f, -1e30f); int Bone = -1;
+                    for (const auto& V : S.m_Vertex)
+                    {
+                        float W = 0; for (int w = 0; w < 4; ++w) if (Top(V.m_SkelBoneIndex[w])) { W += V.m_Weight[w]; Bone = V.m_SkelBoneIndex[w]; }
+                        if (W < 0.05f) continue;
+                        ++n; WMax = std::max(WMax, W);
+                        Lo = xmath::fvec3(std::min(Lo.m_X, V.m_Position.m_X), std::min(Lo.m_Y, V.m_Position.m_Y), std::min(Lo.m_Z, V.m_Position.m_Z));
+                        Hi = xmath::fvec3(std::max(Hi.m_X, V.m_Position.m_X), std::max(Hi.m_Y, V.m_Position.m_Y), std::max(Hi.m_Z, V.m_Position.m_Z));
+                    }
+                    if (n) LogMessage(xresource_pipeline::msg_type::WARNING, std::format("{} (material {}): {} of {} vertices weighted to the root ({}, up to {:.2f}) between {:.3f} {:.3f} {:.3f} and {:.3f} {:.3f} {:.3f}: they stay at the root while a clip moves the hips"
+                        , M.m_Name, S.m_iMaterial, n, S.m_Vertex.size(), Bone >= 0 ? Bones[std::size_t(Bone)].m_Name : std::string("?"), WMax, Lo.m_X, Lo.m_Y, Lo.m_Z, Hi.m_X, Hi.m_Y, Hi.m_Z));
+                }
+        }
+
         void GenenateLODs()
         {
+            ReportTopBoneWeights();
             for (auto& M : m_CompilerMesh)
             {
                 auto it = m_NameToDetail.find(M.m_Name);
