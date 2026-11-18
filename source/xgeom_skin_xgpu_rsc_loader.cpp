@@ -74,6 +74,10 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
     }
     #endif
 
+    // No device (E61: the windowless editor, a server): the CPU part only - the skeleton and animation references animation and ragdolls
+    // read; nothing is uploaded and nothing draws it
+    if (!UserData.m_Device.m_Private) return pXGPUGeom;
+
     // Create buffers
     xgpu::device::error* p;
 
@@ -134,6 +138,8 @@ xresource::loader< xrsc::geom_skin_type_guid_v >::data_type* xresource::loader< 
 void xresource::loader< xrsc::geom_skin_type_guid_v >::Destroy(xresource::mgr& Mgr, data_type&& Data, const full_guid& GUID)
 {
     auto& UserData = Mgr.getUserData<resource_mgr_user_data>();
+
+    if (!UserData.m_Device.m_Private) { xserializer::default_memory_handler_v.Free(xserializer::mem_type{ .m_bUnique = true }, &Data); return; }      // (E61: loaded without a device: no buffers)
 
     // Release all the buffers (all 4 - xgeom_static's own loader omits ClusterBuffer here, which
     // looks like a leak; not propagating that omission into this new plugin)
